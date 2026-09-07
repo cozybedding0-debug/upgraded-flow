@@ -5,11 +5,17 @@ import type {
   ProductKeywordRule,
   SizeKeywordRule,
   KeywordMapping,
+  CategoryKeywordRule,
+  TargetSizeRule,
+  AggregatedCategoryCard,
+  AggregatedSizeRow,
 } from "@/types";
 import {
   getProductKeywordRules,
   getSizeKeywordRules,
   getKeywordMappings,
+  getCategoryKeywordRules,
+  getTargetSizeRules,
 } from "@/lib/tiktokMappingStore";
 
 // Configure pdfjs worker
@@ -72,6 +78,276 @@ export interface ParseResult {
   totalParsed: number;
   matchedCount: number;
   unmatchedCount: number;
+}
+
+/**
+ * Common color names to strip from variation strings in Pass 1
+ */
+export const COMMON_COLOR_WORDS = [
+  "slate grey",
+  "dark grey",
+  "light grey",
+  "charcoal",
+  "grey",
+  "gray",
+  "pure white",
+  "plain white",
+  "white",
+  "black",
+  "silver",
+  "cream",
+  "beige",
+  "navy blue",
+  "royal blue",
+  "duck egg blue",
+  "duck egg",
+  "navy",
+  "blue",
+  "blush pink",
+  "rose",
+  "pink",
+  "sage green",
+  "emerald",
+  "green",
+  "ochre",
+  "natural",
+  "linen",
+  "taupe",
+  "terracotta",
+  "plum",
+  "mustard",
+  "red",
+  "yellow",
+  "orange",
+  "purple",
+  "brown",
+  "ivory",
+  "coffee",
+  "burgundy",
+  "teal",
+  "anthracite",
+];
+
+/**
+ * Cleans raw variation text by stripping label prefixes, color names,
+ * and punctuation, leaving size tokens for direct matching.
+ */
+export function cleanVariationText(raw: string): string {
+  if (!raw) return "";
+  let cleaned = raw;
+
+  // 1. Strip label prefixes
+  cleaned = cleaned.replace(
+    /^(?:Variation|Colour|Color|Size|Style|Option|Spec|Option\s*Name|SKU)\s*[:=]\s*/i,
+    "",
+  );
+
+  // 2. Strip color names
+  for (const color of COMMON_COLOR_WORDS) {
+    const colorRegex = new RegExp(`\\b${color}\\b`, "gi");
+    cleaned = cleaned.replace(colorRegex, " ");
+  }
+
+  // 3. Remove punctuation, brackets, excess whitespace
+  cleaned = cleaned
+    .replace(/[{}[\]()|,;:\-~_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned;
+}
+
+/**
+ * Matches a string against Target Size Rules in STRICT PRIORITY ORDER:
+ * 1. Super King
+ * 2. Small Double (4ft)
+ * 3. Double
+ * 4. King
+ * 5. Single
+ */
+export function matchTargetSizeByPriority(
+  text: string,
+  rules: TargetSizeRule[],
+  strictBoundary: boolean = true,
+): { size: string; matchedVariation: string; priority: number } | null {
+  // Sort strictly by priority ASC (1 is highest)
+  const sorted = [...rules].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+
+  for (const rule of sorted) {
+    for (const variation of rule.variations) {
+      const vTrim = variation.trim();
+      if (!vTrim) continue;
+
+      const escaped = vTrim.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const patternWithFlexibleSpaces = escaped.replace(/\s+/g, "\\s*");
+
+      let regex: RegExp;
+      if (strictBoundary) {
+        regex = new RegExp(`(?:^|[^a-zA-Z0-9])${patternWithFlexibleSpaces}(?:$|[^a-zA-Z0-9])`, "i");
+      } else {
+        regex = new RegExp(patternWithFlexibleSpaces, "i");
+      }
+
+      if (regex.test(text)) {
+        return {
+          size: rule.normalized_size,
+          matchedVariation: vTrim,
+          priority: rule.priority,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Feature 2: Two-Pass Size Extraction Strategy
+ * PASS 1: Dedicated Variation Column Extraction (color stripped)
+ * PASS 2: Title Text Backup Extraction (scans product title)
+ * Fallback: "Unassigned / Standard"
+ */
+export function extractTwoPassSize(
+  rowText: string,
+  dedicatedVariationCol?: string,
+  rules?: TargetSizeRule[],
+): {
+  size: string;
+  pass: "Pass 1 (Dedicated Column)" | "Pass 2 (Title Text Backup)" | "Fallback";
+  matchedVariation?: string;
+  cleanedVariation?: string;
+} {
+  const activeRules = rules && rules.length > 0 ? rules : getTargetSizeRules();
+
+  // PASS 1 (Dedicated Column Extraction)
+  let candidateVariation = dedicatedVariationCol?.trim() || "";
+
+  if (!candidateVariation) {
+    // Look for dedicated "Variation:" or "Colour:" or "| Size" segment in the row
+    const explicitVarMatch = rowText.match(
+      /(?:Variation|Option|Colour|Color|Size)\s*[:=]\s*([^|\n\r]+)/i,
+    );
+    if (explicitVarMatch && explicitVarMatch[1]) {
+      candidateVariation = explicitVarMatch[1].trim();
+    } else {
+      // If line is pipe-delimited
+      const segments = rowText.split(/\s*\|\s*/);
+      if (segments.length > 1) {
+        candidateVariation = segments.slice(1).join(" ");
+      }
+    }
+  }
+
+  if (candidateVariation) {
+    const cleaned = cleanVariationText(candidateVariation);
+    if (cleaned) {
+      const pass1Match = matchTargetSizeByPriority(cleaned, activeRules, true);
+      if (pass1Match) {
+        return {
+          size: pass1Match.size,
+          pass: "Pass 1 (Dedicated Column)",
+          matchedVariation: pass1Match.matchedVariation,
+          cleanedVariation: cleaned,
+        };
+      }
+    }
+  }
+
+  // PASS 2 (Title Text Backup Extraction)
+  // Scan the Product Title text using stricter regex boundaries
+  const titlePortion =
+    rowText.split(/(?:Variation|Colour|Color|Qty|Quantity|SKU|\n|\|)/i)[0]?.trim() || rowText;
+  const pass2Match = matchTargetSizeByPriority(titlePortion, activeRules, true);
+  if (pass2Match) {
+    return {
+      size: pass2Match.size,
+      pass: "Pass 2 (Title Text Backup)",
+      matchedVariation: pass2Match.matchedVariation,
+    };
+  }
+
+  // Also check full row as backup in case variation wasn't cleanly separated
+  const fullRowMatch = matchTargetSizeByPriority(rowText, activeRules, true);
+  if (fullRowMatch) {
+    return {
+      size: fullRowMatch.size,
+      pass: "Pass 2 (Title Text Backup)",
+      matchedVariation: fullRowMatch.matchedVariation,
+    };
+  }
+
+  // Fallback Rule:
+  // If an item matches a valid Product Category Keyword (e.g., Mattress Topper)
+  // but no size can be detected, assign it to a fallback label: Unassigned / Standard.
+  return {
+    size: "Unassigned / Standard",
+    pass: "Fallback",
+  };
+}
+
+/**
+ * Feature 1A: Matches a row against Product Category Mapping Keywords
+ */
+export function matchCategory(
+  text: string,
+  rules?: CategoryKeywordRule[],
+): {
+  categoryName: string;
+  matchedPattern?: string;
+  isFallback: boolean;
+} {
+  const activeRules = rules && rules.length > 0 ? rules : getCategoryKeywordRules();
+
+  for (const rule of activeRules) {
+    if (!rule.pattern) continue;
+    try {
+      const regex = new RegExp(rule.pattern, "i");
+      if (regex.test(text)) {
+        return {
+          categoryName: rule.category_name,
+          matchedPattern: rule.pattern,
+          isFallback: false,
+        };
+      }
+    } catch {
+      if (text.toLowerCase().includes(rule.pattern.toLowerCase())) {
+        return {
+          categoryName: rule.category_name,
+          matchedPattern: rule.pattern,
+          isFallback: false,
+        };
+      }
+    }
+  }
+
+  return {
+    categoryName: "Other / Uncategorized",
+    isFallback: true,
+  };
+}
+
+/**
+ * Feature 1C: Live Mapping Preview & Test Sidebar helper
+ */
+export function testLiveMapping(
+  rawInput: string,
+  categoryRules?: CategoryKeywordRule[],
+  sizeRules?: TargetSizeRule[],
+) {
+  const cat = matchCategory(rawInput, categoryRules);
+  const sizeRes = extractTwoPassSize(rawInput, undefined, sizeRules);
+  const qty = findQuantity(rawInput);
+
+  return {
+    detectedCategory: cat.categoryName,
+    matchedCategoryPattern: cat.matchedPattern,
+    isCategoryFallback: cat.isFallback,
+    detectedSize: sizeRes.size,
+    sizeDetectionPass: sizeRes.pass,
+    matchedSizeVariation: sizeRes.matchedVariation,
+    cleanedVariationString: sizeRes.cleanedVariation,
+    extractedQuantity: qty,
+  };
 }
 
 /**
@@ -370,6 +646,8 @@ export function parsePickingListText(rawText: string, products: Product[]): Pars
   const pRules = getProductKeywordRules();
   const sRules = getSizeKeywordRules();
   const mappings = getKeywordMappings();
+  const catRules = getCategoryKeywordRules();
+  const targetSizeRules = getTargetSizeRules();
 
   // Normalize lines and split into candidate item chunks
   const cleanLines = rawText
@@ -461,21 +739,27 @@ export function parsePickingListText(rawText: string, products: Product[]): Pars
     const candidate = finalCandidates[idx]!;
     const text = candidate.raw;
 
-    const detectedP = detectProductKeyword(text, pRules);
-    const detectedS = detectSizeKeyword(text, sRules);
+    // Category detection & two-pass size extraction
+    const catMatch = matchCategory(text, catRules);
+    const sizeExtract = extractTwoPassSize(text, undefined, targetSizeRules);
+
+    const detectedP = catMatch.isFallback
+      ? detectProductKeyword(text, pRules)
+      : { keyword: catMatch.categoryName };
+    const detectedS = sizeExtract.size || detectSizeKeyword(text, sRules).size;
     const qty = findQuantity(text);
     const orderId = candidate.orderId || findOrderId(text);
     const rawSku = findSku(text);
 
     // Look up inventory match
-    const match = findInventoryMatch(detectedP.keyword, detectedS.size, mappings, products);
+    const match = findInventoryMatch(detectedP.keyword, detectedS, mappings, products);
 
     const draftItem: DraftPickingItem = {
       id: `draft-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
       order_id: orderId,
       raw_title: text,
       detected_product_name: match.productName || detectedP.keyword,
-      detected_size: match.variantName || detectedS.size,
+      detected_size: match.variantName || detectedS,
       quantity: qty,
       unit_price: match.unitPrice || 0,
       sku: match.sku || rawSku,
@@ -485,7 +769,7 @@ export function parsePickingListText(rawText: string, products: Product[]): Pars
       variant_id: match.variantId,
       variant_name: match.variantName,
       available_stock: match.availableStock,
-      category: match.category,
+      category: catMatch.categoryName,
       selected: true,
     };
 
@@ -501,6 +785,113 @@ export function parsePickingListText(rawText: string, products: Product[]): Pars
     totalParsed: items.length,
     matchedCount,
     unmatchedCount,
+  };
+}
+
+/**
+ * Feature 2 & Feature 3:
+ * Parses picking list text and aggregates by Category (Category Isolation)
+ * and Size (SUM by size).
+ */
+export function parsePickingListAndAggregate(
+  rawText: string,
+  products: Product[] = [],
+  filename: string = "TikTok-Picking-List.pdf",
+): {
+  aggregatedCards: AggregatedCategoryCard[];
+  items: DraftPickingItem[];
+  totalUnits: number;
+  totalLines: number;
+  rawText: string;
+} {
+  const parseResult = parsePickingListText(rawText, products);
+  const items = parseResult.items;
+
+  // Strict Category Isolation & Aggregation (SUM by size)
+  const categoryMap = new Map<string, Map<string, { quantity: number; raw_samples: string[] }>>();
+
+  for (const item of items) {
+    // 1. Category Isolation: Category name determines the grouping card
+    const cName = item.category || "Other / Uncategorized";
+    // 2. Normalized size determines the row inside this category card
+    const sName = item.detected_size || "Unassigned / Standard";
+    const qty = Math.max(1, item.quantity || 1);
+
+    if (!categoryMap.has(cName)) {
+      categoryMap.set(cName, new Map());
+    }
+    const sizeMap = categoryMap.get(cName)!;
+    if (!sizeMap.has(sName)) {
+      sizeMap.set(sName, { quantity: 0, raw_samples: [] });
+    }
+    const rec = sizeMap.get(sName)!;
+    rec.quantity += qty;
+    if (rec.raw_samples.length < 2) {
+      rec.raw_samples.push(item.raw_title);
+    }
+  }
+
+  // Canonical size priority order for display sorting
+  const sizePriorityOrder = [
+    "Super King",
+    "Small Double (4ft)",
+    "Small Double",
+    "Double",
+    "King",
+    "Single",
+    "Pair (Pack of 2)",
+    "Pack of 4",
+    "Standard",
+    "Unassigned / Standard",
+  ];
+
+  const aggregatedCards: AggregatedCategoryCard[] = [];
+  let totalUnits = 0;
+
+  categoryMap.forEach((sizeMap, category_name) => {
+    const sizes: AggregatedSizeRow[] = [];
+    let catTotal = 0;
+
+    sizeMap.forEach((data, size) => {
+      sizes.push({
+        id: `row-${category_name}-${size}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+        size,
+        quantity: data.quantity,
+        raw_samples: data.raw_samples,
+      });
+      catTotal += data.quantity;
+      totalUnits += data.quantity;
+    });
+
+    sizes.sort((a, b) => {
+      const idxA = sizePriorityOrder.indexOf(a.size);
+      const idxB = sizePriorityOrder.indexOf(b.size);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.size.localeCompare(b.size);
+    });
+
+    aggregatedCards.push({
+      category_name,
+      total_quantity: catTotal,
+      sizes,
+    });
+  });
+
+  // Sort cards so defined categories come first, uncategorized last
+  aggregatedCards.sort((a, b) => {
+    if (a.category_name.startsWith("Other") && !b.category_name.startsWith("Other")) return 1;
+    if (!a.category_name.startsWith("Other") && b.category_name.startsWith("Other")) return -1;
+    return b.total_quantity - a.total_quantity;
+  });
+
+  return {
+    aggregatedCards,
+    items,
+    totalUnits,
+    totalLines: items.length,
+    rawText,
   };
 }
 

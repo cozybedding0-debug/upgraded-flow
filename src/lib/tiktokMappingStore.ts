@@ -6,12 +6,131 @@ import type {
   KeywordMapping,
   PickingListBatch,
   DraftPickingItem,
+  CategoryKeywordRule,
+  TargetSizeRule,
+  ReviewDashboardData,
 } from "@/types";
 
 const PRODUCT_RULES_KEY = "nukeflow_tiktok_product_rules";
 const SIZE_RULES_KEY = "nukeflow_tiktok_size_rules";
+const CATEGORY_RULES_KEY = "nukeflow_tiktok_category_rules";
+const TARGET_SIZE_RULES_KEY = "nukeflow_tiktok_target_size_rules";
+const REVIEW_DATA_KEY = "nukeflow_tiktok_current_review";
 const MAPPINGS_KEY = "nukeflow_tiktok_mappings";
 const BATCHES_KEY = "nukeflow_tiktok_batches";
+
+// Initial seed data explicitly required by Feature 1A
+export const DEFAULT_CATEGORY_RULES: CategoryKeywordRule[] = [
+  {
+    id: "cat-1",
+    category_name: "Mattress Topper",
+    pattern: "Mattress.*Topper|MattressTopper",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "cat-2",
+    category_name: "Satin Stripe Duvet Cover",
+    pattern: "Satin.*Stripe.*Duvet.*Cover|StripeDuvet",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "cat-3",
+    category_name: "Fitted Sheet",
+    pattern: "Fitted.*Sheet|DeepFit",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "cat-4",
+    category_name: "Flat Sheet",
+    pattern: "Flat.*Sheet|TopSheet",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "cat-5",
+    category_name: "Duvet",
+    pattern: "Duvet|Quilt|Tog",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "cat-6",
+    category_name: "Pillow",
+    pattern: "Pillow|Pillows|Bounce.*Back",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "cat-7",
+    category_name: "Pillowcase",
+    pattern: "Pillowcase|Pillow.*Case",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "cat-8",
+    category_name: "Mattress Protector",
+    pattern: "(Mattress|Bed).*Protector",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+];
+
+// Initial seed data with strict priority order required by Feature 1B & Feature 2
+export const DEFAULT_TARGET_SIZE_RULES: TargetSizeRule[] = [
+  {
+    id: "tsize-1",
+    normalized_size: "Super King",
+    variations: ["Super King", "SK", "6ft", "Superking", "6'0", "6 ft", "180x200"],
+    priority: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "tsize-2",
+    normalized_size: "Small Double (4ft)",
+    variations: [
+      "Small Double",
+      "Sm Dbl",
+      "4ft",
+      "4 ft",
+      "4'0",
+      "Three Quarter",
+      "120x190",
+      "4ft Small Double",
+    ],
+    priority: 2,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "tsize-3",
+    normalized_size: "Double",
+    variations: ["Double", "Dbl", "4ft6in", "4ft6", "4'6", "Full", "135x190", "Std Double"],
+    priority: 3,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "tsize-4",
+    normalized_size: "King",
+    variations: ["King", "K", "5ft", "5 ft", "5'0", "King Size", "150x200"],
+    priority: 4,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "tsize-5",
+    normalized_size: "Single",
+    variations: ["Single", "Sgl", "3ft", "3 ft", "3'0", "Twin", "90x190", "Single 3ft"],
+    priority: 5,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+];
 
 // Default pre-seeded rules based on Cozy Bedding / NukeFlow inventory
 export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
@@ -205,6 +324,8 @@ export const DEFAULT_SIZE_RULES: SizeKeywordRule[] = [
 ];
 
 // In-memory caches
+let categoryRulesCache: CategoryKeywordRule[] | null = null;
+let targetSizeRulesCache: TargetSizeRule[] | null = null;
 let productRulesCache: ProductKeywordRule[] | null = null;
 let sizeRulesCache: SizeKeywordRule[] | null = null;
 let mappingsCache: KeywordMapping[] | null = null;
@@ -224,6 +345,192 @@ function writeStorage<T>(key: string, value: T) {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // quota safety
+  }
+}
+
+// ================= PRODUCT CATEGORY KEYWORD RULES (Feature 1A) =================
+
+export function getCategoryKeywordRules(): CategoryKeywordRule[] {
+  if (categoryRulesCache === null) {
+    categoryRulesCache = readStorage(CATEGORY_RULES_KEY, DEFAULT_CATEGORY_RULES);
+  }
+  return categoryRulesCache;
+}
+
+export function saveCategoryKeywordRule(
+  rule: Partial<CategoryKeywordRule> & { category_name: string; pattern: string },
+): CategoryKeywordRule {
+  const current = getCategoryKeywordRules();
+  const now = new Date().toISOString();
+  let updated: CategoryKeywordRule;
+
+  if (rule.id) {
+    updated = {
+      id: rule.id,
+      category_name: rule.category_name.trim(),
+      pattern: rule.pattern.trim(),
+      created_at: rule.created_at || now,
+      updated_at: now,
+    };
+    const next = current.map((r) => (r.id === rule.id ? updated : r));
+    categoryRulesCache = next;
+    writeStorage(CATEGORY_RULES_KEY, next);
+  } else {
+    updated = {
+      id: `cat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      category_name: rule.category_name.trim(),
+      pattern: rule.pattern.trim(),
+      created_at: now,
+      updated_at: now,
+    };
+    const next = [...current, updated];
+    categoryRulesCache = next;
+    writeStorage(CATEGORY_RULES_KEY, next);
+  }
+
+  if (isSupabaseConfigured) {
+    void supabase
+      .from("tiktok_category_rules")
+      .upsert(updated)
+      .then(({ error }) => {
+        if (error) console.info("Supabase sync info (tiktok_category_rules):", error.message);
+      });
+  }
+
+  return updated;
+}
+
+export function deleteCategoryKeywordRule(id: string) {
+  const current = getCategoryKeywordRules();
+  const next = current.filter((r) => r.id !== id);
+  categoryRulesCache = next;
+  writeStorage(CATEGORY_RULES_KEY, next);
+
+  if (isSupabaseConfigured) {
+    void supabase
+      .from("tiktok_category_rules")
+      .delete()
+      .eq("id", id)
+      .then(() => {});
+  }
+}
+
+export function resetCategoryKeywordRules(): CategoryKeywordRule[] {
+  categoryRulesCache = [...DEFAULT_CATEGORY_RULES];
+  writeStorage(CATEGORY_RULES_KEY, DEFAULT_CATEGORY_RULES);
+  return categoryRulesCache;
+}
+
+// ================= TARGET SIZE MAPPING RULES (Feature 1B & Strict Priority) =================
+
+export function getTargetSizeRules(): TargetSizeRule[] {
+  if (targetSizeRulesCache === null) {
+    const raw = readStorage<TargetSizeRule[]>(TARGET_SIZE_RULES_KEY, DEFAULT_TARGET_SIZE_RULES);
+    // Sort strictly by priority ASC (1: Super King, 2: Small Double, 3: Double, 4: King, 5: Single)
+    targetSizeRulesCache = [...raw].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+  }
+  return targetSizeRulesCache;
+}
+
+export function saveTargetSizeRule(
+  rule: Partial<TargetSizeRule> & {
+    normalized_size: string;
+    variations: string[] | string;
+    priority?: number;
+  },
+): TargetSizeRule {
+  const current = getTargetSizeRules();
+  const now = new Date().toISOString();
+
+  // Normalize variations array
+  const rawVars = Array.isArray(rule.variations)
+    ? rule.variations
+    : rule.variations
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+  let updated: TargetSizeRule;
+
+  if (rule.id) {
+    const existing = current.find((r) => r.id === rule.id);
+    updated = {
+      id: rule.id,
+      normalized_size: rule.normalized_size.trim(),
+      variations: rawVars,
+      priority: rule.priority ?? existing?.priority ?? current.length + 1,
+      created_at: rule.created_at || now,
+      updated_at: now,
+    };
+    const next = current
+      .map((r) => (r.id === rule.id ? updated : r))
+      .sort((a, b) => a.priority - b.priority);
+    targetSizeRulesCache = next;
+    writeStorage(TARGET_SIZE_RULES_KEY, next);
+  } else {
+    const maxP = current.length > 0 ? Math.max(...current.map((r) => r.priority)) : 0;
+    const nextPriority = rule.priority ?? maxP + 1;
+    updated = {
+      id: `tsize-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      normalized_size: rule.normalized_size.trim(),
+      variations: rawVars,
+      priority: nextPriority,
+      created_at: now,
+      updated_at: now,
+    };
+    const next = [...current, updated].sort((a, b) => a.priority - b.priority);
+    targetSizeRulesCache = next;
+    writeStorage(TARGET_SIZE_RULES_KEY, next);
+  }
+
+  if (isSupabaseConfigured) {
+    void supabase
+      .from("tiktok_target_size_rules")
+      .upsert(updated)
+      .then(({ error }) => {
+        if (error) console.info("Supabase sync info (tiktok_target_size_rules):", error.message);
+      });
+  }
+
+  return updated;
+}
+
+export function deleteTargetSizeRule(id: string) {
+  const current = getTargetSizeRules();
+  const next = current.filter((r) => r.id !== id);
+  targetSizeRulesCache = next;
+  writeStorage(TARGET_SIZE_RULES_KEY, next);
+
+  if (isSupabaseConfigured) {
+    void supabase
+      .from("tiktok_target_size_rules")
+      .delete()
+      .eq("id", id)
+      .then(() => {});
+  }
+}
+
+export function resetTargetSizeRules(): TargetSizeRule[] {
+  targetSizeRulesCache = [...DEFAULT_TARGET_SIZE_RULES];
+  writeStorage(TARGET_SIZE_RULES_KEY, DEFAULT_TARGET_SIZE_RULES);
+  return targetSizeRulesCache;
+}
+
+// ================= REVIEW DASHBOARD DATA CACHING (Feature 3) =================
+
+export function getReviewDashboardData(): ReviewDashboardData | null {
+  return readStorage<ReviewDashboardData | null>(REVIEW_DATA_KEY, null);
+}
+
+export function saveReviewDashboardData(data: ReviewDashboardData | null): void {
+  if (data === null) {
+    try {
+      localStorage.removeItem(REVIEW_DATA_KEY);
+    } catch {
+      // ignore
+    }
+  } else {
+    writeStorage(REVIEW_DATA_KEY, data);
   }
 }
 

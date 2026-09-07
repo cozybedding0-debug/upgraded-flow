@@ -6,12 +6,199 @@ const listeners = new Set<(products: Product[]) => void>();
 let cache: Product[] | null = null;
 let fetching: Promise<Product[]> | null = null;
 
+export const DEFAULT_PRODUCTS: Product[] = [
+  {
+    id: "prod-topper",
+    category: "Mattress Topper",
+    product_name: "Extra Thick Hotel Quality Mattress Topper",
+    size: "",
+    unit_price: 24.99,
+    stock_quantity: 85,
+    sku: "TOP-HOTEL",
+    has_variants: true,
+    variation_type: "Size & Color",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    variants: [
+      {
+        id: "var-top-single",
+        product_id: "prod-topper",
+        variation_value: "Single",
+        color: "White",
+        sku: "TOP-SNG-WHT",
+        unit_price: 18.99,
+        stock_quantity: 20,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-top-sdouble",
+        product_id: "prod-topper",
+        variation_value: "Small Double",
+        color: "White",
+        sku: "TOP-SDB-WHT",
+        unit_price: 21.99,
+        stock_quantity: 15,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-top-double",
+        product_id: "prod-topper",
+        variation_value: "Double",
+        color: "White",
+        sku: "TOP-DBL-WHT",
+        unit_price: 24.99,
+        stock_quantity: 25,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-top-king",
+        product_id: "prod-topper",
+        variation_value: "King",
+        color: "White",
+        sku: "TOP-KNG-WHT",
+        unit_price: 28.99,
+        stock_quantity: 15,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-top-sking",
+        product_id: "prod-topper",
+        variation_value: "Super King",
+        color: "White",
+        sku: "TOP-SKNG-WHT",
+        unit_price: 32.99,
+        stock_quantity: 10,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ],
+  },
+  {
+    id: "prod-duvet",
+    category: "Duvet Cover",
+    product_name: "Luxury Microfibre Duvet Cover Set",
+    size: "",
+    unit_price: 16.99,
+    stock_quantity: 65,
+    sku: "DUV-SET",
+    has_variants: true,
+    variation_type: "Size & Color",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    variants: [
+      {
+        id: "var-duv-single",
+        product_id: "prod-duvet",
+        variation_value: "Single",
+        color: "Grey",
+        sku: "DUV-SNG-GRY",
+        unit_price: 14.99,
+        stock_quantity: 20,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-duv-double",
+        product_id: "prod-duvet",
+        variation_value: "Double",
+        color: "Grey",
+        sku: "DUV-DBL-GRY",
+        unit_price: 18.99,
+        stock_quantity: 25,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-duv-king",
+        product_id: "prod-duvet",
+        variation_value: "King",
+        color: "Charcoal",
+        sku: "DUV-KNG-CHR",
+        unit_price: 22.99,
+        stock_quantity: 20,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ],
+  },
+  {
+    id: "prod-fitted",
+    category: "Fitted Sheet",
+    product_name: "Deep Elasticated Fitted Bed Sheet",
+    size: "",
+    unit_price: 11.99,
+    stock_quantity: 70,
+    sku: "FIT-SHT",
+    has_variants: true,
+    variation_type: "Size & Color",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    variants: [
+      {
+        id: "var-fit-single",
+        product_id: "prod-fitted",
+        variation_value: "Single",
+        color: "White",
+        sku: "FIT-SNG-WHT",
+        unit_price: 9.99,
+        stock_quantity: 25,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-fit-double",
+        product_id: "prod-fitted",
+        variation_value: "Double",
+        color: "White",
+        sku: "FIT-DBL-WHT",
+        unit_price: 12.99,
+        stock_quantity: 30,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: "var-fit-king",
+        product_id: "prod-fitted",
+        variation_value: "King",
+        color: "White",
+        sku: "FIT-KNG-WHT",
+        unit_price: 14.99,
+        stock_quantity: 15,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ],
+  },
+  {
+    id: "prod-pillows",
+    category: "Pillow",
+    product_name: "Hotel Bounce Back Pillows (Pack of 2)",
+    size: "Pair (Pack of 2)",
+    unit_price: 12.99,
+    stock_quantity: 45,
+    sku: "PLW-HOTEL-2PK",
+    has_variants: false,
+    variation_type: "",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+];
+
 function readLocal(): Product[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Product[]) : [];
+    if (!raw) {
+      writeLocal(DEFAULT_PRODUCTS);
+      return DEFAULT_PRODUCTS;
+    }
+    const parsed = JSON.parse(raw) as Product[];
+    return parsed.length > 0 ? parsed : DEFAULT_PRODUCTS;
   } catch {
-    return [];
+    return DEFAULT_PRODUCTS;
   }
 }
 

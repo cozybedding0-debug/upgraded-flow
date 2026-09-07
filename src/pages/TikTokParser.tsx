@@ -18,12 +18,17 @@ import {
   getPickingBatches,
   savePickingBatch,
   getSupabaseSqlSchema,
+  getReviewDashboardData,
+  saveReviewDashboardData,
 } from "@/lib/tiktokMappingStore";
 import {
   extractTextFromPdf,
   parsePickingListText,
+  parsePickingListAndAggregate,
   SAMPLE_TIKTOK_PICKING_LIST_TEXT,
 } from "@/lib/pdfPickingParser";
+import ReviewDashboard from "@/components/tiktok/ReviewDashboard";
+import KeywordSettingsTab from "@/components/tiktok/KeywordSettingsTab";
 import type {
   Product,
   ProductKeywordRule,
@@ -33,6 +38,7 @@ import type {
   PickingListBatch,
   DailyOrder,
   OrderStatus,
+  ReviewDashboardData,
 } from "@/types";
 import {
   Upload,
@@ -60,11 +66,16 @@ import {
   Info,
 } from "lucide-react";
 
-type ActiveTab = "upload" | "settings" | "history";
+type ActiveTab = "review" | "upload" | "settings" | "history";
 
 export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrders?: () => void }) {
   const { profile } = useAuth();
-  const [activeTab, setActiveTab] = useState<ActiveTab>("upload");
+  const [reviewData, setReviewData] = useState<ReviewDashboardData | null>(() =>
+    getReviewDashboardData(),
+  );
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
+    getReviewDashboardData() ? "review" : "upload",
+  );
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
 
@@ -162,7 +173,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
         );
       }
       const currentProducts = products.length > 0 ? products : getProducts();
-      const parseResult = parsePickingListText(text, currentProducts);
+      const parseResult = parsePickingListAndAggregate(text, currentProducts, file.name);
 
       if (parseResult.items.length === 0) {
         throw new Error(
@@ -171,7 +182,17 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
       }
 
       setDraftItems(parseResult.items);
-      setActiveTab("upload");
+      const newRev: ReviewDashboardData = {
+        filename: file.name,
+        uploaded_at: new Date().toISOString(),
+        categories: parseResult.aggregatedCards,
+        total_units: parseResult.totalUnits,
+        total_lines: parseResult.totalLines,
+        raw_items_count: parseResult.items.length,
+      };
+      setReviewData(newRev);
+      saveReviewDashboardData(newRev);
+      setActiveTab("review");
     } catch (err: unknown) {
       console.error("PDF Parsing Error:", err);
       setExtractError(err instanceof Error ? err.message : "Failed to parse PDF file.");
@@ -184,10 +205,26 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
   const handleLoadSample = () => {
     setExtractError(null);
     setSubmitSuccess(null);
-    setBatchName("TikTok-Sample-PickingList-Evri48.pdf");
+    const sampleName = "TikTok-Sample-PickingList-Evri48.pdf";
+    setBatchName(sampleName);
     const currentProducts = products.length > 0 ? products : getProducts();
-    const parseResult = parsePickingListText(SAMPLE_TIKTOK_PICKING_LIST_TEXT, currentProducts);
+    const parseResult = parsePickingListAndAggregate(
+      SAMPLE_TIKTOK_PICKING_LIST_TEXT,
+      currentProducts,
+      sampleName,
+    );
     setDraftItems(parseResult.items);
+    const newRev: ReviewDashboardData = {
+      filename: sampleName,
+      uploaded_at: new Date().toISOString(),
+      categories: parseResult.aggregatedCards,
+      total_units: parseResult.totalUnits,
+      total_lines: parseResult.totalLines,
+      raw_items_count: parseResult.items.length,
+    };
+    setReviewData(newRev);
+    saveReviewDashboardData(newRev);
+    setActiveTab("review");
   };
 
   // Handle manual text paste
@@ -195,12 +232,24 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     if (!pastedText.trim()) return;
     setExtractError(null);
     setSubmitSuccess(null);
-    setBatchName("TikTok-Pasted-List.txt");
+    const pastedName = "TikTok-Pasted-List.txt";
+    setBatchName(pastedName);
     const currentProducts = products.length > 0 ? products : getProducts();
-    const parseResult = parsePickingListText(pastedText, currentProducts);
+    const parseResult = parsePickingListAndAggregate(pastedText, currentProducts, pastedName);
     setDraftItems(parseResult.items);
+    const newRev: ReviewDashboardData = {
+      filename: pastedName,
+      uploaded_at: new Date().toISOString(),
+      categories: parseResult.aggregatedCards,
+      total_units: parseResult.totalUnits,
+      total_lines: parseResult.totalLines,
+      raw_items_count: parseResult.items.length,
+    };
+    setReviewData(newRev);
+    saveReviewDashboardData(newRev);
     setShowPasteModal(false);
     setPastedText("");
+    setActiveTab("review");
   };
 
   // Re-run parsing / matching on current draft items with latest keyword mappings
@@ -484,6 +533,138 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     }
   };
 
+  // Handle Commit & Deduct Stock directly from Review Dashboard (Feature 3 CTA)
+  const handleCommitReviewStock = async () => {
+    if (!reviewData || reviewData.categories.length === 0) return;
+    setIsSubmitting(true);
+    setExtractError(null);
+
+    const currentProducts = products.length > 0 ? products : getProducts();
+    const userId = profile?.id ? String(profile.id) : "user-local";
+    const now = new Date().toISOString();
+    const batchId = `pkl-rev-${Date.now()}`;
+
+    const newOrders: DailyOrder[] = [];
+    const deductionItems: {
+      product_id: string | null;
+      variant_id: string | null;
+      quantity: number;
+    }[] = [];
+
+    let orderCounter = 0;
+    for (const cat of reviewData.categories) {
+      for (const sizeRow of cat.sizes) {
+        orderCounter++;
+        // Find matching product in catalog
+        const matchedProd =
+          currentProducts.find((p) => {
+            const catMatch =
+              (p.category && p.category.toLowerCase().includes(cat.category_name.toLowerCase())) ||
+              p.product_name.toLowerCase().includes(cat.category_name.toLowerCase());
+            const sizeMatch =
+              (p.size && p.size.toLowerCase() === sizeRow.size.toLowerCase()) ||
+              p.product_name.toLowerCase().includes(sizeRow.size.toLowerCase());
+            return catMatch && sizeMatch;
+          }) ||
+          currentProducts.find(
+            (p) =>
+              p.product_name.toLowerCase().includes(cat.category_name.toLowerCase()) ||
+              (p.category && p.category.toLowerCase().includes(cat.category_name.toLowerCase())),
+          );
+
+        const orderItem: DailyOrder = {
+          id: `order-tiktok-rev-${Date.now()}-${orderCounter}`,
+          user_id: userId,
+          product_id: matchedProd?.id || null,
+          variant_id: null,
+          product_name: matchedProd?.product_name || `${cat.category_name} - ${sizeRow.size}`,
+          category: matchedProd?.category || cat.category_name,
+          size: sizeRow.size,
+          unit_price: matchedProd?.unit_price || 0,
+          quantity: sizeRow.quantity,
+          total_price: (matchedProd?.unit_price || 0) * sizeRow.quantity,
+          order_date: orderDate,
+          channel: channelName,
+          notes: `TikTok Picking Review [${reviewData.filename}]`,
+          logged_by: userId,
+          customer_name: "TikTok Shop Customer",
+          customer_order_id: `TTS-${Date.now().toString().slice(-6)}-${orderCounter}`,
+          status: "Completed" as OrderStatus,
+          created_at: now,
+        };
+        newOrders.push(orderItem);
+
+        if (matchedProd?.id) {
+          deductionItems.push({
+            product_id: matchedProd.id,
+            variant_id: null,
+            quantity: sizeRow.quantity,
+          });
+        }
+      }
+    }
+
+    try {
+      // 1. Deduct local stock immediately
+      deductLocalStock(deductionItems);
+      // 2. Save local orders
+      saveLocalOrders(newOrders);
+
+      // 3. Supabase sync if enabled
+      if (isSupabaseConfigured && profile?.id) {
+        const supabaseInsertData = newOrders.map((o) => ({
+          user_id: o.user_id,
+          product_id: o.product_id,
+          variant_id: o.variant_id,
+          product_name: o.product_name,
+          category: o.category,
+          size: o.size,
+          unit_price: o.unit_price,
+          quantity: o.quantity,
+          total_price: o.total_price,
+          order_date: o.order_date,
+          channel: o.channel,
+          notes: o.notes,
+          logged_by: o.logged_by,
+          customer_name: o.customer_name,
+          customer_order_id: o.customer_order_id,
+          status: o.status,
+        }));
+        void supabase.from("orders").insert(supabaseInsertData);
+      }
+
+      // 4. Record batch
+      const batchRecord: PickingListBatch = {
+        id: batchId,
+        filename: reviewData.filename,
+        uploaded_at: now,
+        total_items: newOrders.length,
+        matched_items: deductionItems.length,
+        unmatched_items: newOrders.length - deductionItems.length,
+        total_quantity: reviewData.total_units,
+        status: "submitted",
+        items: draftItems,
+      };
+      savePickingBatch(batchRecord);
+      setBatches(getPickingBatches());
+
+      // 5. Clear review data and refresh products
+      saveReviewDashboardData(null);
+      setReviewData(null);
+      setDraftItems([]);
+      await fetchProducts();
+      refreshAllData();
+      setSubmitSuccess(
+        `Successfully committed ${reviewData.total_units} units across ${reviewData.categories.length} categories! Inventory deducted and Daily Orders created.`,
+      );
+    } catch (err: unknown) {
+      console.error("Review stock commit error:", err);
+      setExtractError(err instanceof Error ? err.message : "Failed to commit stock.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Filtered draft items
   const filteredItems = useMemo(() => {
     return draftItems.filter((item) => {
@@ -553,17 +734,36 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+        <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl overflow-x-auto">
           <button
+            id="tab-btn-review"
+            onClick={() => setActiveTab("review")}
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
+              activeTab === "review"
+                ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+            }`}
+          >
+            <Layers size={15} />
+            Review Dashboard
+            {reviewData && reviewData.total_units > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold">
+                {reviewData.total_units} units
+              </span>
+            )}
+          </button>
+
+          <button
+            id="tab-btn-upload"
             onClick={() => setActiveTab("upload")}
-            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
               activeTab === "upload"
                 ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             }`}
           >
             <Upload size={15} />
-            Upload & Review
+            Upload & Drafts
             {draftItems.length > 0 && (
               <span className="w-5 h-5 rounded-full bg-brand-600 text-white text-[10px] flex items-center justify-center">
                 {draftItems.length}
@@ -572,23 +772,22 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
           </button>
 
           <button
+            id="tab-btn-settings"
             onClick={() => setActiveTab("settings")}
-            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
               activeTab === "settings"
                 ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             }`}
           >
             <Settings size={15} />
-            Keyword Rules & SKU Mapping
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300">
-              {productRules.length + sizeRules.length}
-            </span>
+            Keyword Settings & Rules
           </button>
 
           <button
+            id="tab-btn-history"
             onClick={() => setActiveTab("history")}
-            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
               activeTab === "history"
                 ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
@@ -640,6 +839,23 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
             <p className="text-xs mt-0.5 text-rose-700 dark:text-rose-400/90">{extractError}</p>
           </div>
         </div>
+      )}
+
+      {/* ================= TAB 0: DAILY REVIEW DASHBOARD (FEATURE 2 & 3) ================= */}
+      {activeTab === "review" && (
+        <ReviewDashboard
+          reviewData={reviewData}
+          onUpdateReviewData={(data) => {
+            setReviewData(data);
+            saveReviewDashboardData(data);
+          }}
+          onCommitStock={handleCommitReviewStock}
+          isCommitting={isSubmitting}
+          products={products}
+          onNavigateToUpload={() => setActiveTab("upload")}
+          onNavigateToOrders={onNavigateToOrders}
+          onLoadSampleData={handleLoadSample}
+        />
       )}
 
       {/* ================= TAB 1: UPLOAD & DRAFT REVIEW ================= */}
@@ -1156,7 +1372,10 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
 
       {/* ================= TAB 2: KEYWORD RULES & SKU MAPPING ================= */}
       {activeTab === "settings" && (
-        <div className="space-y-6">
+        <div className="space-y-8">
+          {/* Dynamic Keyword & Size Configuration (Features 1A, 1B, 1C) */}
+          <KeywordSettingsTab />
+
           {/* Information Callout */}
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-3">
             <Info size={16} className="mt-0.5 text-brand-600 shrink-0" />

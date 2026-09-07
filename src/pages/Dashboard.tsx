@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { formatCurrency, formatDateShort, getDateRange, getPastDays } from "@/lib/utils";
 import { CATEGORIES } from "@/types";
 import type { DailyOrder, Product, DateRangePreset } from "@/types";
+import { getProducts } from "@/lib/productsStore";
+import { readLocalOrders } from "@/lib/ordersStore";
 import MetricCard from "@/components/MetricCard";
 import BarChart from "@/components/BarChart";
 import PieChart from "@/components/PieChart";
@@ -52,6 +54,13 @@ export default function Dashboard() {
     }
 
     setLoading(true);
+    if (!isSupabaseConfigured) {
+      setOrders(readLocalOrders());
+      setProducts(getProducts());
+      setLoading(false);
+      return;
+    }
+
     try {
       const [{ data: orderData }, { data: productData }] = await Promise.all([
         supabase
@@ -65,16 +74,17 @@ export default function Dashboard() {
           .eq("user_id", profile.id)
           .order("product_name"),
       ]);
-      setOrders((orderData as DailyOrder[]) || []);
-      setProducts(
-        ((productData ?? []) as unknown[])
-          .map(normalizeProduct)
-          .filter((product): product is Product => product !== null),
-      );
+      const fetchedOrders = (orderData as DailyOrder[]) || [];
+      const fetchedProducts = ((productData ?? []) as unknown[])
+        .map(normalizeProduct)
+        .filter((product): product is Product => product !== null);
+
+      setOrders(fetchedOrders.length > 0 ? fetchedOrders : readLocalOrders());
+      setProducts(fetchedProducts.length > 0 ? fetchedProducts : getProducts());
     } catch {
-      // Backend unreachable (demo mode) — render empty dashboard instead of hanging
-      setOrders([]);
-      setProducts([]);
+      // Backend unreachable (demo mode) — render local data instead of empty
+      setOrders(readLocalOrders());
+      setProducts(getProducts());
     } finally {
       setLoading(false);
     }

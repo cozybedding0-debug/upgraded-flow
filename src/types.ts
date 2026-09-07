@@ -142,3 +142,42 @@ export interface PickingListBatch {
   status: "draft" | "submitted" | "cancelled";
   items: DraftPickingItem[];
 }
+
+export interface CategoryKeywordRule {
+  id: string;
+  category_name: string;
+  pattern: string; // Regex or text pattern, e.g. "Mattress.*Topper|MattressTopper"
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TargetSizeRule {
+  id: string;
+  normalized_size: string; // e.g. "Single", "Small Double (4ft)", "Double", "King", "Super King"
+  variations: string[]; // e.g. ["Small Double", "Sm Dbl", "4ft", "4 ft"]
+  priority: number; // 1 to 5 (1 = highest priority)
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AggregatedSizeRow {
+  id: string;
+  size: string;
+  quantity: number;
+  raw_samples?: string[];
+}
+
+export interface AggregatedCategoryCard {
+  category_name: string;
+  total_quantity: number;
+  sizes: AggregatedSizeRow[];
+}
+
+export interface ReviewDashboardData {
+  filename: string;
+  uploaded_at: string;
+  categories: AggregatedCategoryCard[];
+  total_units: number;
+  total_lines: number;
+  raw_items_count: number;
+}

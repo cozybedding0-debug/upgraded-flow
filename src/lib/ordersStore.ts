@@ -3,12 +3,80 @@ import { getProducts, setProducts } from "@/lib/productsStore";
 
 const ORDERS_KEY = "nukeflow_orders";
 
+export const DEFAULT_ORDERS: DailyOrder[] = [
+  {
+    id: "sample-order-1",
+    product_id: "prod-topper",
+    variant_id: "var-top-double",
+    product_name: "Extra Thick Hotel Quality Mattress Topper",
+    category: "Mattress Topper",
+    size: "Double",
+    color: "White",
+    unit_price: 24.99,
+    quantity: 2,
+    total_price: 49.98,
+    order_date: new Date().toISOString().split("T")[0]!,
+    channel: "TikTok Shop",
+    notes: "Customer requested morning delivery",
+    logged_by: "demo-admin",
+    created_at: new Date().toISOString(),
+    customer_name: "Sarah Jenkins",
+    customer_order_id: "TT-9481023",
+    status: "Completed",
+  },
+  {
+    id: "sample-order-2",
+    product_id: "prod-duvet",
+    variant_id: "var-duv-king",
+    product_name: "Luxury Microfibre Duvet Cover Set",
+    category: "Duvet Cover",
+    size: "King",
+    color: "Charcoal",
+    unit_price: 22.99,
+    quantity: 1,
+    total_price: 22.99,
+    order_date: new Date().toISOString().split("T")[0]!,
+    channel: "TikTok Shop",
+    notes: "",
+    logged_by: "demo-admin",
+    created_at: new Date().toISOString(),
+    customer_name: "Michael Thompson",
+    customer_order_id: "TT-9481024",
+    status: "Completed",
+  },
+  {
+    id: "sample-order-3",
+    product_id: "prod-pillows",
+    variant_id: null,
+    product_name: "Hotel Bounce Back Pillows (Pack of 2)",
+    category: "Pillow",
+    size: "Pair (Pack of 2)",
+    color: "",
+    unit_price: 12.99,
+    quantity: 3,
+    total_price: 38.97,
+    order_date: new Date().toISOString().split("T")[0]!,
+    channel: "Direct",
+    notes: "Customer collection from warehouse",
+    logged_by: "demo-admin",
+    created_at: new Date().toISOString(),
+    customer_name: "Emma Watson",
+    customer_order_id: "DIR-1049",
+    status: "Completed",
+  },
+];
+
 export function readLocalOrders(): DailyOrder[] {
   try {
     const raw = localStorage.getItem(ORDERS_KEY);
-    return raw ? (JSON.parse(raw) as DailyOrder[]) : [];
+    if (!raw) {
+      writeLocalOrders(DEFAULT_ORDERS);
+      return DEFAULT_ORDERS;
+    }
+    const parsed = JSON.parse(raw) as DailyOrder[];
+    return parsed.length > 0 ? parsed : DEFAULT_ORDERS;
   } catch {
-    return [];
+    return DEFAULT_ORDERS;
   }
 }
 

@@ -1,0 +1,6 @@
+{
+  "name": "NukeFlow",
+  "description": "Inventory, products, and orders management dashboard for tracking bedding stock and sales",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

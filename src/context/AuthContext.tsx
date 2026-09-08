@@ -66,6 +66,7 @@ interface AuthContextValue {
   session: boolean;
   loading: boolean;
   demoMode: boolean;
+  enterDemoMode: () => { error: null };
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -94,6 +95,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     if (!isSupabaseConfigured) {
+      const explicitSignOut =
+        typeof window !== "undefined" && window.sessionStorage.getItem("explicit_sign_out") === "1";
+      if (!explicitSignOut) {
+        writeDemoSession();
+        setProfile(demoProfile());
+        setDemoMode(true);
+      }
       setLoading(false);
       return () => {
         mounted = false;
@@ -195,6 +203,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    try {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem("explicit_sign_out", "1");
+      }
+    } catch {
+      // ignore storage errors
+    }
     clearDemoSession();
     setDemoMode(false);
     try {
@@ -212,6 +227,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session: !!profile,
         loading,
         demoMode,
+        enterDemoMode,
         signIn,
         signUp,
         signOut,

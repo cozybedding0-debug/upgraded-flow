@@ -3,7 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Package, Mail, Lock, User, Eye, EyeOff } from "lucide-react";
 
 export default function Login() {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, enterDemoMode } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -137,6 +137,23 @@ export default function Login() {
 
             <button type="submit" disabled={loading} className="btn-primary w-full">
               {loading ? "Please wait..." : mode === "signin" ? "Sign In" : "Create Account"}
+            </button>
+
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-slate-200 dark:border-slate-700" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white dark:bg-slate-800 px-2 text-slate-400">or</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => enterDemoMode()}
+              className="w-full py-2.5 px-4 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 transition-colors"
+            >
+              Explore Demo Mode (Instant Access)
             </button>
           </form>
 

@@ -18,7 +18,7 @@ export interface ProductVariant {
   id: string;
   product_id: string;
   variation_value: string; // Size
-  color?: string; // NEW: Color field added
+  color?: string | undefined; // NEW: Color field added
   sku: string;
   unit_price: number;
   stock_quantity: number;
@@ -36,7 +36,7 @@ export interface Product {
   sku: string;
   has_variants: boolean;
   variation_type: string;
-  variants?: ProductVariant[];
+  variants?: ProductVariant[] | undefined;
   created_at: string;
   updated_at: string;
 }
@@ -45,12 +45,13 @@ export type OrderStatus = "Pending" | "Completed" | "Shipped";
 
 export interface DailyOrder {
   id: string;
+  user_id?: string | null | undefined;
   product_id: string | null;
   variant_id: string | null;
   product_name: string;
   category: Category;
   size: string;
-  color?: string; // NEW: Color field added for daily orders
+  color?: string | undefined; // NEW: Color field added for daily orders
   unit_price: number;
   quantity: number;
   total_price: number;
@@ -82,8 +83,9 @@ export interface ProductKeywordRule {
   id: string;
   keyword: string; // e.g., "Mattress Topper", "Duvet Cover", "Fitted Sheet", "Tog"
   aliases: string[]; // e.g., ["Topper", "Overfilled Topper"]
-  target_product_id?: string;
-  notes?: string;
+  regex_pattern?: string | undefined; // Optional custom regex pattern matching against Product Titles
+  target_product_id?: string | undefined;
+  notes?: string | undefined;
   created_at: string;
   updated_at: string;
 }
@@ -91,8 +93,10 @@ export interface ProductKeywordRule {
 export interface SizeKeywordRule {
   id: string;
   canonical_size: string; // e.g., "Single", "Double", "King", "Super King", "4ft", "3ft"
-  synonyms: string[]; // e.g., ["3ft", "single", "twin", "90x190"]
-  notes?: string;
+  synonyms: string[]; // Variation keywords e.g., ["3ft", "single", "twin", "90x190"]
+  sku_patterns?: string[] | undefined; // SKU text codes e.g., ["SNG", "3FT", "TOP-SNG"]
+  regex_pattern?: string | undefined; // Optional custom regex pattern matching against Variation / SKU
+  notes?: string | undefined;
   created_at: string;
   updated_at: string;
 }
@@ -103,32 +107,68 @@ export interface KeywordMapping {
   size_keyword: string;
   product_id: string;
   product_name: string;
-  variant_id?: string;
-  variant_name?: string;
-  sku?: string;
-  notes?: string;
+  variant_id?: string | undefined;
+  variant_name?: string | undefined;
+  sku?: string | undefined;
+  notes?: string | undefined;
   created_at: string;
   updated_at: string;
 }
 
 export interface DraftPickingItem {
   id: string;
-  order_id?: string;
+  order_id?: string | undefined;
   raw_title: string;
-  detected_product_name: string;
-  detected_size: string;
-  quantity: number;
+  raw_title_clean?: string | undefined; // Isolated Product Name / Title column text
+  raw_variation?: string | undefined; // Isolated Variation / Color-Size column text
+  detected_product_name: string; // Extracted strictly from Title column
+  detected_size: string; // Extracted strictly from Variation / Seller SKU column
+  quantity: number; // Extracted strictly from Qty column
   unit_price: number;
-  sku?: string;
+  sku?: string | undefined;
   status: "matched" | "unmatched" | "manual";
-  product_id?: string;
-  product_name?: string;
-  variant_id?: string;
-  variant_name?: string;
-  category?: string;
-  available_stock?: number;
-  notes?: string;
-  selected?: boolean;
+  product_id?: string | undefined;
+  product_name?: string | undefined;
+  variant_id?: string | undefined;
+  variant_name?: string | undefined;
+  category?: string | undefined;
+  available_stock?: number | undefined;
+  notes?: string | undefined;
+  selected?: boolean | undefined;
+}
+
+export interface AggregatedPickingItem {
+  id: string;
+  size: string;
+  canonical_size: string;
+  color?: string | undefined;
+  total_quantity: number;
+  raw_count: number;
+  source_order_ids: string[];
+  raw_titles: string[];
+  sku?: string | undefined;
+  status: "matched" | "unmatched" | "manual";
+  product_id?: string | undefined;
+  product_name?: string | undefined;
+  variant_id?: string | undefined;
+  variant_name?: string | undefined;
+  category?: string | undefined;
+  unit_price?: number | undefined;
+  available_stock?: number | undefined;
+  notes?: string | undefined;
+  selected?: boolean | undefined;
+}
+
+export interface ProductGroupSummary {
+  id: string;
+  group_name: string;
+  product_keyword: string;
+  category?: string | undefined;
+  total_quantity: number;
+  total_sizes: number;
+  matched_count: number;
+  unmatched_count: number;
+  sizes: AggregatedPickingItem[];
 }
 
 export interface PickingListBatch {
@@ -141,43 +181,4 @@ export interface PickingListBatch {
   total_quantity: number;
   status: "draft" | "submitted" | "cancelled";
   items: DraftPickingItem[];
-}
-
-export interface CategoryKeywordRule {
-  id: string;
-  category_name: string;
-  pattern: string; // Regex or text pattern, e.g. "Mattress.*Topper|MattressTopper"
-  created_at: string;
-  updated_at: string;
-}
-
-export interface TargetSizeRule {
-  id: string;
-  normalized_size: string; // e.g. "Single", "Small Double (4ft)", "Double", "King", "Super King"
-  variations: string[]; // e.g. ["Small Double", "Sm Dbl", "4ft", "4 ft"]
-  priority: number; // 1 to 5 (1 = highest priority)
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AggregatedSizeRow {
-  id: string;
-  size: string;
-  quantity: number;
-  raw_samples?: string[];
-}
-
-export interface AggregatedCategoryCard {
-  category_name: string;
-  total_quantity: number;
-  sizes: AggregatedSizeRow[];
-}
-
-export interface ReviewDashboardData {
-  filename: string;
-  uploaded_at: string;
-  categories: AggregatedCategoryCard[];
-  total_units: number;
-  total_lines: number;
-  raw_items_count: number;
 }

@@ -1,9 +1,9 @@
-import { useState, useEffect, FormEvent, Fragment } from "react";
-import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { useState, useEffect, useCallback, FormEvent, Fragment } from "react";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
+import { getProducts, saveProductLocal, deleteProductLocal } from "@/lib/productsStore";
 import { formatCurrency } from "@/lib/utils";
 import type { Product, ProductVariant } from "@/types";
-import { getProducts, saveProductLocal, deleteProductLocal } from "@/lib/productsStore";
 import { Modal } from "@/components/ConfirmDialog";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import {
@@ -108,60 +108,69 @@ export default function Products() {
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
+  const fetchCategories = useCallback(async () => {
+    try {
+      if (isSupabaseConfigured) {
+        const { data, error } = await supabase.from("categories").select("name").order("name");
+        if (data && !error && data.length > 0) {
+          setDbCategories(data);
+          return;
+        }
+      }
+      const local = getProducts();
+      const catNames = Array.from(new Set(local.map((p) => p.category))).filter(Boolean);
+      setDbCategories(catNames.map((name) => ({ name })));
+    } catch {
+      const local = getProducts();
+      const catNames = Array.from(new Set(local.map((p) => p.category))).filter(Boolean);
+      setDbCategories(catNames.map((name) => ({ name })));
+    }
+  }, []);
+
+  const fetchProducts = useCallback(async () => {
+    setLoading(true);
+    try {
+      if (isSupabaseConfigured && profile?.id) {
+        const [productsRes, variantsRes] = await Promise.all([
+          supabase.from("products").select("*").eq("user_id", profile.id),
+          supabase.from("product_variants").select("*").eq("user_id", profile.id),
+        ]);
+
+        if (productsRes.data && !productsRes.error) {
+          const allVariants = variantsRes.data ?? [];
+          const mergedProducts = productsRes.data.map((p) => ({
+            ...p,
+            variants: allVariants.filter((v) => v.product_id === p.id),
+          }));
+
+          const parsed = mergedProducts
+            .map(normalizeProduct)
+            .filter((product): product is Product => product !== null);
+
+          if (parsed.length > 0) {
+            setProducts(parsed);
+            return;
+          }
+        }
+      }
+      setProducts(getProducts());
+    } catch {
+      setProducts(getProducts());
+    } finally {
+      setLoading(false);
+    }
+  }, [profile?.id]);
+
   useEffect(() => {
     void fetchProducts();
     void fetchCategories();
-  }, [profile?.id]);
+  }, [fetchProducts, fetchCategories]);
 
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 3500);
     return () => clearTimeout(timer);
   }, [toast]);
-
-  async function fetchCategories() {
-    if (!isSupabaseConfigured) {
-      setDbCategories([
-        { name: "Mattress Topper" },
-        { name: "Duvet Cover" },
-        { name: "Fitted Sheet" },
-        { name: "Flat Sheet" },
-        { name: "Duvet" },
-        { name: "Pillow" },
-        { name: "Pillowcase" },
-        { name: "Mattress Protector" },
-      ]);
-      return;
-    }
-    try {
-      const { data, error } = await supabase.from("categories").select("name").order("name");
-      if (data && !error && data.length > 0) {
-        setDbCategories(data);
-      } else {
-        setDbCategories([
-          { name: "Mattress Topper" },
-          { name: "Duvet Cover" },
-          { name: "Fitted Sheet" },
-          { name: "Flat Sheet" },
-          { name: "Duvet" },
-          { name: "Pillow" },
-          { name: "Pillowcase" },
-          { name: "Mattress Protector" },
-        ]);
-      }
-    } catch {
-      setDbCategories([
-        { name: "Mattress Topper" },
-        { name: "Duvet Cover" },
-        { name: "Fitted Sheet" },
-        { name: "Flat Sheet" },
-        { name: "Duvet" },
-        { name: "Pillow" },
-        { name: "Pillowcase" },
-        { name: "Mattress Protector" },
-      ]);
-    }
-  }
 
   const filtered = products.filter((p) => {
     const matchesSearch =
@@ -170,47 +179,6 @@ export default function Products() {
     const matchesCat = filterCat === "All" || p.category === filterCat;
     return matchesSearch && matchesCat;
   });
-
-  async function fetchProducts() {
-    if (!profile?.id) {
-      setProducts(getProducts());
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    if (!isSupabaseConfigured) {
-      setProducts(getProducts());
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const [productsRes, variantsRes] = await Promise.all([
-        supabase.from("products").select("*").eq("user_id", profile.id),
-        supabase.from("product_variants").select("*").eq("user_id", profile.id),
-      ]);
-
-      if (productsRes.error) throw productsRes.error;
-      if (variantsRes.error) throw variantsRes.error;
-
-      const allVariants = variantsRes.data ?? [];
-      const mergedProducts = (productsRes.data ?? []).map((p) => ({
-        ...p,
-        variants: allVariants.filter((v) => v.product_id === p.id),
-      }));
-
-      const normalized = mergedProducts
-        .map(normalizeProduct)
-        .filter((product): product is Product => product !== null);
-
-      setProducts(normalized.length > 0 ? normalized : getProducts());
-    } catch {
-      setProducts(getProducts());
-    } finally {
-      setLoading(false);
-    }
-  }
 
   function openAdd() {
     setEditing(null);
@@ -316,169 +284,127 @@ export default function Products() {
 
     setSaving(true);
 
-    const now = new Date().toISOString();
-    const productId =
-      editing?.id || `product-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const productVariants: ProductVariant[] = validVariants.map((v, i) => ({
-      id: v.id.startsWith("v") ? `variant-${Date.now()}-${i}` : v.id,
+    const productId = editing?.id || `product-${Date.now()}`;
+    const savedVariants: ProductVariant[] = validVariants.map((v, i) => ({
+      id: v.id && !v.id.startsWith("new-") ? v.id : `var-${Date.now()}-${i}`,
       product_id: productId,
       variation_value: v.variation_value.trim(),
       color: v.color.trim(),
       sku: v.sku.trim(),
       unit_price: parseFloat(v.unit_price) || 0,
       stock_quantity: parseInt(v.stock_quantity) || 0,
-      created_at: now,
-      updated_at: now,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     }));
 
-    const localProduct: Product = {
+    const fullProduct: Product = {
       id: productId,
       category: finalCategory,
       product_name: form.product_name.trim(),
       has_variants: true,
       variation_type: form.variation_type.trim() || "Size & Color",
       size: "",
-      unit_price: 0,
-      stock_quantity: 0,
-      sku: productVariants[0]?.sku || "",
-      variants: productVariants,
-      created_at: editing?.created_at || now,
-      updated_at: now,
+      unit_price: savedVariants[0]?.unit_price || 0,
+      stock_quantity: savedVariants.reduce((sum, v) => sum + (v.stock_quantity || 0), 0),
+      sku: savedVariants[0]?.sku || "",
+      variants: savedVariants,
+      created_at: editing?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
 
-    if (!isSupabaseConfigured) {
-      saveProductLocal(localProduct);
-      setProducts(getProducts());
-      setForm({ ...EMPTY_FORM, variants: [newVariant()] });
-      setFormError(null);
-      setModalOpen(false);
-      setSaving(false);
-      setToast({
-        type: "success",
-        message: editing ? "Product updated successfully." : "Product added successfully.",
-      });
-      return;
-    }
-
     try {
-      if (isAddingNewCat) {
-        const { error: catError } = await supabase
-          .from("categories")
-          .insert([{ name: finalCategory }]);
-        if (catError && catError.code !== "23505") {
-          console.error("Category save error:", catError);
+      if (isSupabaseConfigured && profile?.id) {
+        if (isAddingNewCat) {
+          await supabase.from("categories").insert([{ name: finalCategory }]);
         }
+
+        const productPayload = {
+          user_id: profile.id,
+          category: finalCategory,
+          product_name: form.product_name.trim(),
+          has_variants: true,
+          variation_type: form.variation_type.trim() || "Size & Color",
+          size: "",
+          unit_price: 0,
+          stock_quantity: 0,
+          sku: "",
+        };
+
+        if (editing) {
+          await supabase
+            .from("products")
+            .update(productPayload)
+            .eq("id", editing.id)
+            .eq("user_id", profile.id);
+
+          await supabase
+            .from("product_variants")
+            .delete()
+            .eq("product_id", editing.id)
+            .eq("user_id", profile.id);
+        } else {
+          await supabase.from("products").insert({ ...productPayload, id: productId });
+        }
+
+        const variantPayloads = validVariants.map((v) => ({
+          user_id: profile.id,
+          product_id: productId,
+          variation_value: v.variation_value.trim(),
+          color: v.color.trim(),
+          sku: v.sku.trim(),
+          unit_price: parseFloat(v.unit_price) || 0,
+          stock_quantity: parseInt(v.stock_quantity) || 0,
+        }));
+
+        await supabase.from("product_variants").insert(variantPayloads);
       }
-
-      const productPayload = {
-        user_id: profile.id,
-        category: finalCategory,
-        product_name: form.product_name.trim(),
-        has_variants: true,
-        variation_type: form.variation_type.trim() || "Size & Color",
-        size: "",
-        unit_price: 0,
-        stock_quantity: 0,
-        sku: "",
-      };
-
-      let savedProduct: Product | null = null;
-
-      if (editing) {
-        const { data, error } = await supabase
-          .from("products")
-          .update(productPayload)
-          .eq("id", editing.id)
-          .eq("user_id", profile.id)
-          .select("*")
-          .single();
-        if (error) throw error;
-        savedProduct = data as Product;
-
-        await supabase
-          .from("product_variants")
-          .delete()
-          .eq("product_id", editing.id)
-          .eq("user_id", profile.id);
-      } else {
-        const { data, error } = await supabase
-          .from("products")
-          .insert(productPayload)
-          .select("*")
-          .single();
-        if (error) throw error;
-        if (!data) throw new Error("Failed to create product");
-        savedProduct = data as Product;
-      }
-
-      const activeProductId = savedProduct?.id || productId;
-
-      const variantPayloads = validVariants.map((v) => ({
-        user_id: profile.id,
-        product_id: activeProductId,
-        variation_value: v.variation_value.trim(),
-        color: v.color.trim(),
-        sku: v.sku.trim(),
-        unit_price: parseFloat(v.unit_price) || 0,
-        stock_quantity: parseInt(v.stock_quantity) || 0,
-      }));
-
-      await supabase.from("product_variants").insert(variantPayloads);
-
-      setForm({ ...EMPTY_FORM, variants: [newVariant()] });
-      setFormError(null);
-      setModalOpen(false);
-      setToast({
-        type: "success",
-        message: editing ? "Product updated successfully." : "Product added successfully.",
-      });
-      fetchCategories();
-      fetchProducts();
-    } catch {
-      // Fallback to local storage on error
-      saveProductLocal(localProduct);
-      setProducts(getProducts());
-      setForm({ ...EMPTY_FORM, variants: [newVariant()] });
-      setFormError(null);
-      setModalOpen(false);
-      setToast({
-        type: "success",
-        message: editing ? "Product updated locally." : "Product added locally.",
-      });
-    } finally {
-      setSaving(false);
+    } catch (err) {
+      console.warn("Remote save failed, keeping local copy:", err);
     }
+
+    saveProductLocal(fullProduct);
+    setProducts((prev) => {
+      const exists = prev.some((p) => p.id === productId);
+      const next = exists
+        ? prev.map((p) => (p.id === productId ? fullProduct : p))
+        : [...prev, fullProduct];
+      return next.sort((a, b) => a.product_name.localeCompare(b.product_name));
+    });
+
+    setForm({ ...EMPTY_FORM, variants: [newVariant()] });
+    setFormError(null);
+    setModalOpen(false);
+    setToast({
+      type: "success",
+      message: editing ? "Product updated successfully." : "Product added successfully.",
+    });
+    void fetchCategories();
+    setSaving(false);
   }
 
   async function handleDelete() {
-    if (!deleteTarget || !profile?.id) return;
-    deleteProductLocal(deleteTarget.id);
-    setProducts(getProducts());
-
-    if (!isSupabaseConfigured) {
-      setToast({ type: "success", message: "Product deleted successfully." });
-      setDeleteTarget(null);
-      return;
-    }
-
+    if (!deleteTarget) return;
     try {
-      await supabase
-        .from("product_variants")
-        .delete()
-        .eq("product_id", deleteTarget.id)
-        .eq("user_id", profile.id);
+      if (isSupabaseConfigured && profile?.id) {
+        await supabase
+          .from("product_variants")
+          .delete()
+          .eq("product_id", deleteTarget.id)
+          .eq("user_id", profile.id);
 
-      const { error: productError } = await supabase
-        .from("products")
-        .delete()
-        .eq("id", deleteTarget.id)
-        .eq("user_id", profile.id);
-      if (productError) throw productError;
-
-      setToast({ type: "success", message: "Product deleted successfully." });
-    } catch {
-      setToast({ type: "success", message: "Product deleted successfully." });
+        await supabase
+          .from("products")
+          .delete()
+          .eq("id", deleteTarget.id)
+          .eq("user_id", profile.id);
+      }
+    } catch (err) {
+      console.warn("Remote delete failed, deleting locally:", err);
     }
+
+    deleteProductLocal(deleteTarget.id);
+    setProducts((current) => current.filter((product) => product.id !== deleteTarget.id));
+    setToast({ type: "success", message: "Product deleted successfully." });
     setDeleteTarget(null);
   }
 

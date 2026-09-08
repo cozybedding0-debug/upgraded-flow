@@ -6,131 +6,12 @@ import type {
   KeywordMapping,
   PickingListBatch,
   DraftPickingItem,
-  CategoryKeywordRule,
-  TargetSizeRule,
-  ReviewDashboardData,
 } from "@/types";
 
 const PRODUCT_RULES_KEY = "nukeflow_tiktok_product_rules";
 const SIZE_RULES_KEY = "nukeflow_tiktok_size_rules";
-const CATEGORY_RULES_KEY = "nukeflow_tiktok_category_rules";
-const TARGET_SIZE_RULES_KEY = "nukeflow_tiktok_target_size_rules";
-const REVIEW_DATA_KEY = "nukeflow_tiktok_current_review";
 const MAPPINGS_KEY = "nukeflow_tiktok_mappings";
 const BATCHES_KEY = "nukeflow_tiktok_batches";
-
-// Initial seed data explicitly required by Feature 1A
-export const DEFAULT_CATEGORY_RULES: CategoryKeywordRule[] = [
-  {
-    id: "cat-1",
-    category_name: "Mattress Topper",
-    pattern: "Mattress.*Topper|MattressTopper",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "cat-2",
-    category_name: "Satin Stripe Duvet Cover",
-    pattern: "Satin.*Stripe.*Duvet.*Cover|StripeDuvet",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "cat-3",
-    category_name: "Fitted Sheet",
-    pattern: "Fitted.*Sheet|DeepFit",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "cat-4",
-    category_name: "Flat Sheet",
-    pattern: "Flat.*Sheet|TopSheet",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "cat-5",
-    category_name: "Duvet",
-    pattern: "Duvet|Quilt|Tog",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "cat-6",
-    category_name: "Pillow",
-    pattern: "Pillow|Pillows|Bounce.*Back",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "cat-7",
-    category_name: "Pillowcase",
-    pattern: "Pillowcase|Pillow.*Case",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "cat-8",
-    category_name: "Mattress Protector",
-    pattern: "(Mattress|Bed).*Protector",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-];
-
-// Initial seed data with strict priority order required by Feature 1B & Feature 2
-export const DEFAULT_TARGET_SIZE_RULES: TargetSizeRule[] = [
-  {
-    id: "tsize-1",
-    normalized_size: "Super King",
-    variations: ["Super King", "SK", "6ft", "Superking", "6'0", "6 ft", "180x200"],
-    priority: 1,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "tsize-2",
-    normalized_size: "Small Double (4ft)",
-    variations: [
-      "Small Double",
-      "Sm Dbl",
-      "4ft",
-      "4 ft",
-      "4'0",
-      "Three Quarter",
-      "120x190",
-      "4ft Small Double",
-    ],
-    priority: 2,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "tsize-3",
-    normalized_size: "Double",
-    variations: ["Double", "Dbl", "4ft6in", "4ft6", "4'6", "Full", "135x190", "Std Double"],
-    priority: 3,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "tsize-4",
-    normalized_size: "King",
-    variations: ["King", "K", "5ft", "5 ft", "5'0", "King Size", "150x200"],
-    priority: 4,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "tsize-5",
-    normalized_size: "Single",
-    variations: ["Single", "Sgl", "3ft", "3 ft", "3'0", "Twin", "90x190", "Single 3ft"],
-    priority: 5,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-];
 
 // Default pre-seeded rules based on Cozy Bedding / NukeFlow inventory
 export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
@@ -144,8 +25,25 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
       "7.5cm Topper",
       "Memory Foam Topper",
       "Extra Thick Topper",
+      "Overfilled Bed Mattress Topper",
     ],
-    notes: "Matches hotel quality and extra thick mattress toppers",
+    regex_pattern: "Mattress.*Topper|MattressTopper",
+    notes: "Matches hotel quality, memory foam, and extra thick mattress toppers",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "prule-satin-stripe",
+    keyword: "Satin Stripe Duvet Cover",
+    aliases: [
+      "Hotel Stripe Duvet Cover",
+      "Satin Stripe Quilt Set",
+      "Stripe Bedding Set",
+      "Satin Stripe Duvet",
+      "200TC Satin Stripe",
+    ],
+    regex_pattern: "Satin.*Stripe.*Duvet.*Cover|StripeDuvet",
+    notes: "Strictly isolates satin stripe duvet cover sets from plain duvet covers",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   },
@@ -153,6 +51,7 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
     id: "prule-2",
     keyword: "Duvet Cover",
     aliases: ["Duvet Set", "Quilt Cover", "Bedding Set", "Cover Set", "Quilt Set"],
+    regex_pattern: "\\b(?:duvet\\s+cover|quilt\\s+cover|duvet\\s+set|quilt\\s+set)\\b",
     notes: "Matches duvet covers and quilt bedding sets",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -167,6 +66,7 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
       "Elastic Sheet",
       "Fitted Mattress Sheet",
     ],
+    regex_pattern: "Fitted.*Sheet|DeepFit",
     notes: "Matches deep and standard fitted bed sheets",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -175,6 +75,7 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
     id: "prule-4",
     keyword: "Flat Sheet",
     aliases: ["Top Sheet", "Plain Flat Sheet"],
+    regex_pattern: "\\b(?:flat\\s+sheet|top\\s+sheet)\\b",
     notes: "Matches traditional flat sheets",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -192,6 +93,8 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
       "4.5 Tog",
       "Tog",
     ],
+    regex_pattern:
+      "\\b(?:winter\\s+duvet|summer\\s+duvet|\\d+(?:\\.\\d+)?\\s*tog|tog\\s+duvet|duvet|quilt)\\b",
     notes: "Matches duvets and tog rated quilts",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -206,6 +109,8 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
       "Memory Foam Pillow",
       "Stripe Pillow",
     ],
+    regex_pattern:
+      "\\b(?:bounce\\s+back\\s+pillow|hotel\\s+pillow|memory\\s+foam\\s+pillow|pillows?)\\b",
     notes: "Matches individual and multi-pack sleeping pillows",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -220,6 +125,7 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
       "Housewife Pillowcase",
       "Oxford Pillowcase",
     ],
+    regex_pattern: "\\b(?:pillowcases?|pillow\\s+cases?|pillow\\s+covers?)\\b",
     notes: "Matches pillowcases and pillow protectors",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -228,6 +134,8 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
     id: "prule-8",
     keyword: "Mattress Protector",
     aliases: ["Bed Protector", "Waterproof Protector", "Quilted Protector", "Mattress Cover"],
+    regex_pattern:
+      "\\b(?:mattress\\s+protector|bed\\s+protector|waterproof\\s+protector|quilted\\s+protector)\\b",
     notes: "Matches quilted and waterproof mattress protectors",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -236,72 +144,52 @@ export const DEFAULT_PRODUCT_RULES: ProductKeywordRule[] = [
 
 export const DEFAULT_SIZE_RULES: SizeKeywordRule[] = [
   {
-    id: "srule-1",
-    canonical_size: "Single",
-    synonyms: ["3ft", "single", "twin", "90x190", "90 x 190", "3'0", "3'0\"", "single 3ft"],
-    notes: "Standard UK single (90 x 190 cm / 3ft)",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "srule-2",
-    canonical_size: "Small Double",
-    synonyms: [
-      "4ft",
-      "small double",
-      "three quarter",
-      "120x190",
-      "120 x 190",
-      "4'0",
-      "4'0\"",
-      "queen small",
-      "4ft small double",
-    ],
-    notes: "UK Small Double / Three-Quarter (120 x 190 cm / 4ft)",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "srule-3",
-    canonical_size: "Double",
-    synonyms: [
-      "4ft6",
-      "4ft 6",
-      "double",
-      "full",
-      "135x190",
-      "135 x 190",
-      "4'6",
-      "4'6\"",
-      "double 4ft6",
-      "std double",
-    ],
-    notes: "Standard UK Double (135 x 190 cm / 4ft 6in)",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "srule-4",
-    canonical_size: "King",
-    synonyms: ["5ft", "king", "king size", "150x200", "150 x 200", "5'0", "5'0\"", "king 5ft"],
-    notes: "Standard UK King Size (150 x 200 cm / 5ft)",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "srule-5",
+    id: "srule-superking",
     canonical_size: "Super King",
-    synonyms: [
-      "6ft",
-      "super king",
-      "superking",
-      "180x200",
-      "180 x 200",
-      "6'0",
-      "6'0\"",
-      "super king 6ft",
-    ],
-    notes: "UK Super King Size (180 x 200 cm / 6ft)",
+    synonyms: ["Super King", "SK", "6ft", "Superking", "180x200", "6'0", "6'0\""],
+    sku_patterns: ["SK", "SUPERKING", "6FT", "TOP-SK", "DUV-SK", "SUPER-KING"],
+    regex_pattern: "\\b(?:super\\s*king|superking|sk|6ft)\\b",
+    notes: "Super King size matching (SK, 6ft, Superking)",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "srule-smalldouble",
+    canonical_size: "Small Double (4ft)",
+    synonyms: ["Small Double", "Sm Dbl", "4ft", "4 ft", "Three Quarter", "120x190", "4'0"],
+    sku_patterns: ["4FT", "SM-DBL", "S-DBL", "TOP-4FT", "SHT-4FT"],
+    regex_pattern: "\\b(?:small\\s*double|sm\\s*dbl|4\\s*ft|4ft)\\b",
+    notes: "Small Double 4ft size matching (4FT, Sm Dbl)",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "srule-double",
+    canonical_size: "Double",
+    synonyms: ["Double", "Dbl", "4ft6in", "4ft6", "4ft 6", "135x190", "4'6", "full"],
+    sku_patterns: ["DBL", "4FT6", "DOUBLE", "TOP-DBL", "DUV-DBL"],
+    regex_pattern: "\\b(?:double|dbl|4ft6in|4ft6|4ft\\s*6|full)\\b",
+    notes: "Standard UK Double matching (Dbl, 4ft6in)",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "srule-king",
+    canonical_size: "King",
+    synonyms: ["King", "K", "5ft", "150x200", "5'0", "King Size"],
+    sku_patterns: ["KNG", "5FT", "KING", "TOP-KNG", "DUV-KNG"],
+    regex_pattern: "\\b(?:king(?:\\s*size)?|5ft)\\b",
+    notes: "Standard UK King matching (K, 5ft)",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: "srule-single",
+    canonical_size: "Single",
+    synonyms: ["Single", "Sgl", "3ft", "Twin", "90x190", "3'0"],
+    sku_patterns: ["SNG", "SINGLE", "3FT", "TOP-SNG", "DUV-SNG"],
+    regex_pattern: "\\b(?:single|sgl|3ft)\\b",
+    notes: "Standard UK Single matching (Sgl, 3ft)",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   },
@@ -309,6 +197,8 @@ export const DEFAULT_SIZE_RULES: SizeKeywordRule[] = [
     id: "srule-6",
     canonical_size: "Pair (Pack of 2)",
     synonyms: ["pair", "2 pack", "pack of 2", "2 pcs", "2-pack", "twin pack"],
+    sku_patterns: ["PAIR", "2PK", "PLW-PAIR", "2PACK"],
+    regex_pattern: "\\b(?:pair|2\\s*pack|pack\\s*of\\s*2|2\\s*pcs|twin\\s*pack)\\b",
     notes: "Applicable to pillows, pillowcases, accessories",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -317,6 +207,8 @@ export const DEFAULT_SIZE_RULES: SizeKeywordRule[] = [
     id: "srule-7",
     canonical_size: "Pack of 4",
     synonyms: ["4 pack", "pack of 4", "4 pcs", "4-pack"],
+    sku_patterns: ["4PK", "PLW-4PK", "4PACK"],
+    regex_pattern: "\\b(?:4\\s*pack|pack\\s*of\\s*4|4\\s*pcs)\\b",
     notes: "Applicable to pillow multi-packs",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -324,8 +216,6 @@ export const DEFAULT_SIZE_RULES: SizeKeywordRule[] = [
 ];
 
 // In-memory caches
-let categoryRulesCache: CategoryKeywordRule[] | null = null;
-let targetSizeRulesCache: TargetSizeRule[] | null = null;
 let productRulesCache: ProductKeywordRule[] | null = null;
 let sizeRulesCache: SizeKeywordRule[] | null = null;
 let mappingsCache: KeywordMapping[] | null = null;
@@ -348,197 +238,19 @@ function writeStorage<T>(key: string, value: T) {
   }
 }
 
-// ================= PRODUCT CATEGORY KEYWORD RULES (Feature 1A) =================
-
-export function getCategoryKeywordRules(): CategoryKeywordRule[] {
-  if (categoryRulesCache === null) {
-    categoryRulesCache = readStorage(CATEGORY_RULES_KEY, DEFAULT_CATEGORY_RULES);
-  }
-  return categoryRulesCache;
-}
-
-export function saveCategoryKeywordRule(
-  rule: Partial<CategoryKeywordRule> & { category_name: string; pattern: string },
-): CategoryKeywordRule {
-  const current = getCategoryKeywordRules();
-  const now = new Date().toISOString();
-  let updated: CategoryKeywordRule;
-
-  if (rule.id) {
-    updated = {
-      id: rule.id,
-      category_name: rule.category_name.trim(),
-      pattern: rule.pattern.trim(),
-      created_at: rule.created_at || now,
-      updated_at: now,
-    };
-    const next = current.map((r) => (r.id === rule.id ? updated : r));
-    categoryRulesCache = next;
-    writeStorage(CATEGORY_RULES_KEY, next);
-  } else {
-    updated = {
-      id: `cat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      category_name: rule.category_name.trim(),
-      pattern: rule.pattern.trim(),
-      created_at: now,
-      updated_at: now,
-    };
-    const next = [...current, updated];
-    categoryRulesCache = next;
-    writeStorage(CATEGORY_RULES_KEY, next);
-  }
-
-  if (isSupabaseConfigured) {
-    void supabase
-      .from("tiktok_category_rules")
-      .upsert(updated)
-      .then(({ error }) => {
-        if (error) console.info("Supabase sync info (tiktok_category_rules):", error.message);
-      });
-  }
-
-  return updated;
-}
-
-export function deleteCategoryKeywordRule(id: string) {
-  const current = getCategoryKeywordRules();
-  const next = current.filter((r) => r.id !== id);
-  categoryRulesCache = next;
-  writeStorage(CATEGORY_RULES_KEY, next);
-
-  if (isSupabaseConfigured) {
-    void supabase
-      .from("tiktok_category_rules")
-      .delete()
-      .eq("id", id)
-      .then(() => {});
-  }
-}
-
-export function resetCategoryKeywordRules(): CategoryKeywordRule[] {
-  categoryRulesCache = [...DEFAULT_CATEGORY_RULES];
-  writeStorage(CATEGORY_RULES_KEY, DEFAULT_CATEGORY_RULES);
-  return categoryRulesCache;
-}
-
-// ================= TARGET SIZE MAPPING RULES (Feature 1B & Strict Priority) =================
-
-export function getTargetSizeRules(): TargetSizeRule[] {
-  if (targetSizeRulesCache === null) {
-    const raw = readStorage<TargetSizeRule[]>(TARGET_SIZE_RULES_KEY, DEFAULT_TARGET_SIZE_RULES);
-    // Sort strictly by priority ASC (1: Super King, 2: Small Double, 3: Double, 4: King, 5: Single)
-    targetSizeRulesCache = [...raw].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
-  }
-  return targetSizeRulesCache;
-}
-
-export function saveTargetSizeRule(
-  rule: Partial<TargetSizeRule> & {
-    normalized_size: string;
-    variations: string[] | string;
-    priority?: number;
-  },
-): TargetSizeRule {
-  const current = getTargetSizeRules();
-  const now = new Date().toISOString();
-
-  // Normalize variations array
-  const rawVars = Array.isArray(rule.variations)
-    ? rule.variations
-    : rule.variations
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-  let updated: TargetSizeRule;
-
-  if (rule.id) {
-    const existing = current.find((r) => r.id === rule.id);
-    updated = {
-      id: rule.id,
-      normalized_size: rule.normalized_size.trim(),
-      variations: rawVars,
-      priority: rule.priority ?? existing?.priority ?? current.length + 1,
-      created_at: rule.created_at || now,
-      updated_at: now,
-    };
-    const next = current
-      .map((r) => (r.id === rule.id ? updated : r))
-      .sort((a, b) => a.priority - b.priority);
-    targetSizeRulesCache = next;
-    writeStorage(TARGET_SIZE_RULES_KEY, next);
-  } else {
-    const maxP = current.length > 0 ? Math.max(...current.map((r) => r.priority)) : 0;
-    const nextPriority = rule.priority ?? maxP + 1;
-    updated = {
-      id: `tsize-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      normalized_size: rule.normalized_size.trim(),
-      variations: rawVars,
-      priority: nextPriority,
-      created_at: now,
-      updated_at: now,
-    };
-    const next = [...current, updated].sort((a, b) => a.priority - b.priority);
-    targetSizeRulesCache = next;
-    writeStorage(TARGET_SIZE_RULES_KEY, next);
-  }
-
-  if (isSupabaseConfigured) {
-    void supabase
-      .from("tiktok_target_size_rules")
-      .upsert(updated)
-      .then(({ error }) => {
-        if (error) console.info("Supabase sync info (tiktok_target_size_rules):", error.message);
-      });
-  }
-
-  return updated;
-}
-
-export function deleteTargetSizeRule(id: string) {
-  const current = getTargetSizeRules();
-  const next = current.filter((r) => r.id !== id);
-  targetSizeRulesCache = next;
-  writeStorage(TARGET_SIZE_RULES_KEY, next);
-
-  if (isSupabaseConfigured) {
-    void supabase
-      .from("tiktok_target_size_rules")
-      .delete()
-      .eq("id", id)
-      .then(() => {});
-  }
-}
-
-export function resetTargetSizeRules(): TargetSizeRule[] {
-  targetSizeRulesCache = [...DEFAULT_TARGET_SIZE_RULES];
-  writeStorage(TARGET_SIZE_RULES_KEY, DEFAULT_TARGET_SIZE_RULES);
-  return targetSizeRulesCache;
-}
-
-// ================= REVIEW DASHBOARD DATA CACHING (Feature 3) =================
-
-export function getReviewDashboardData(): ReviewDashboardData | null {
-  return readStorage<ReviewDashboardData | null>(REVIEW_DATA_KEY, null);
-}
-
-export function saveReviewDashboardData(data: ReviewDashboardData | null): void {
-  if (data === null) {
-    try {
-      localStorage.removeItem(REVIEW_DATA_KEY);
-    } catch {
-      // ignore
-    }
-  } else {
-    writeStorage(REVIEW_DATA_KEY, data);
-  }
-}
-
 // ================= PRODUCT KEYWORD RULES =================
 
 export function getProductKeywordRules(): ProductKeywordRule[] {
   if (productRulesCache === null) {
-    productRulesCache = readStorage(PRODUCT_RULES_KEY, DEFAULT_PRODUCT_RULES);
+    const stored = readStorage<ProductKeywordRule[]>(PRODUCT_RULES_KEY, []);
+    if (!stored || stored.length === 0) {
+      productRulesCache = DEFAULT_PRODUCT_RULES;
+      writeStorage(PRODUCT_RULES_KEY, DEFAULT_PRODUCT_RULES);
+    } else {
+      const storedKeys = new Set(stored.map((r) => r.keyword.toLowerCase()));
+      const missing = DEFAULT_PRODUCT_RULES.filter((d) => !storedKeys.has(d.keyword.toLowerCase()));
+      productRulesCache = missing.length > 0 ? [...stored, ...missing] : stored;
+    }
   }
   return productRulesCache;
 }
@@ -553,8 +265,9 @@ export function saveProductKeywordRule(
   if (rule.id) {
     updatedRule = {
       id: rule.id,
-      keyword: rule.keyword.trim(),
+      keyword: (rule.keyword || "").trim(),
       aliases: rule.aliases || [],
+      regex_pattern: rule.regex_pattern?.trim() || undefined,
       target_product_id: rule.target_product_id,
       notes: rule.notes || "",
       created_at: rule.created_at || now,
@@ -566,8 +279,9 @@ export function saveProductKeywordRule(
   } else {
     updatedRule = {
       id: `prule-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      keyword: rule.keyword.trim(),
+      keyword: (rule.keyword || "").trim(),
       aliases: rule.aliases || [],
+      regex_pattern: rule.regex_pattern?.trim() || undefined,
       target_product_id: rule.target_product_id,
       notes: rule.notes || "",
       created_at: now,
@@ -609,9 +323,57 @@ export function deleteProductKeywordRule(id: string) {
 
 // ================= SIZE KEYWORD RULES =================
 
+/**
+ * Priority rank for strict size keyword matching:
+ * 1. Super King / Superking / SK / 6ft
+ * 2. Small Double / 4FT / 4 ft / Sm Dbl
+ * 3. Double / Dbl / 4ft6in
+ * 4. King / K / 5ft
+ * 5. Single / Sgl / 3ft
+ */
+export function getSizePriorityRank(canonical: string): number {
+  const low = (canonical || "").toLowerCase().trim();
+  if (low.includes("super king") || low.includes("superking") || low === "sk" || low === "6ft") return 1;
+  if (low.includes("small double") || low.includes("sm dbl") || low.includes("4ft") || low.includes("4 ft")) return 2;
+  if ((low.includes("double") || low.includes("dbl") || low.includes("4ft6")) && !low.includes("small")) return 3;
+  if ((low.includes("king") || low === "5ft") && !low.includes("super")) return 4;
+  if (low.includes("single") || low.includes("sgl") || low === "3ft") return 5;
+  return 10;
+}
+
 export function getSizeKeywordRules(): SizeKeywordRule[] {
   if (sizeRulesCache === null) {
-    sizeRulesCache = readStorage(SIZE_RULES_KEY, DEFAULT_SIZE_RULES);
+    const raw = readStorage<SizeKeywordRule[]>(SIZE_RULES_KEY, []);
+    let rules: SizeKeywordRule[];
+
+    if (!raw || raw.length === 0) {
+      rules = DEFAULT_SIZE_RULES;
+      writeStorage(SIZE_RULES_KEY, DEFAULT_SIZE_RULES);
+    } else {
+      // Migrate "Small Double" to "Small Double (4ft)" and ensure seed rules exist
+      const migrated = raw.map((r) => {
+        if (r.canonical_size === "Small Double") {
+          return {
+            ...r,
+            canonical_size: "Small Double (4ft)",
+            synonyms: Array.from(new Set([...(r.synonyms || []), "Small Double", "Sm Dbl", "4ft", "4 ft"])),
+          };
+        }
+        return r;
+      });
+
+      const existingNames = new Set(migrated.map((r) => r.canonical_size.toLowerCase()));
+      const missingDefaults = DEFAULT_SIZE_RULES.filter((d) => !existingNames.has(d.canonical_size.toLowerCase()));
+      rules = missingDefaults.length > 0 ? [...migrated, ...missingDefaults] : migrated;
+    }
+
+    // Always sort by strict priority order: Super King -> Small Double (4ft) -> Double -> King -> Single
+    sizeRulesCache = [...rules].sort((a, b) => {
+      const rankA = getSizePriorityRank(a.canonical_size);
+      const rankB = getSizePriorityRank(b.canonical_size);
+      if (rankA !== rankB) return rankA - rankB;
+      return a.canonical_size.localeCompare(b.canonical_size);
+    });
   }
   return sizeRulesCache;
 }
@@ -626,8 +388,10 @@ export function saveSizeKeywordRule(
   if (rule.id) {
     updatedRule = {
       id: rule.id,
-      canonical_size: rule.canonical_size.trim(),
+      canonical_size: (rule.canonical_size || "").trim(),
       synonyms: rule.synonyms || [],
+      sku_patterns: rule.sku_patterns || [],
+      regex_pattern: rule.regex_pattern?.trim() || undefined,
       notes: rule.notes || "",
       created_at: rule.created_at || now,
       updated_at: now,
@@ -638,8 +402,10 @@ export function saveSizeKeywordRule(
   } else {
     updatedRule = {
       id: `srule-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      canonical_size: rule.canonical_size.trim(),
+      canonical_size: (rule.canonical_size || "").trim(),
       synonyms: rule.synonyms || [],
+      sku_patterns: rule.sku_patterns || [],
+      regex_pattern: rule.regex_pattern?.trim() || undefined,
       notes: rule.notes || "",
       created_at: now,
       updated_at: now,
@@ -700,8 +466,8 @@ export function saveKeywordMapping(
   if (mapping.id) {
     updatedMapping = {
       id: mapping.id,
-      product_keyword: mapping.product_keyword.trim(),
-      size_keyword: mapping.size_keyword.trim(),
+      product_keyword: (mapping.product_keyword || "").trim(),
+      size_keyword: (mapping.size_keyword || "").trim(),
       product_id: mapping.product_id,
       product_name: mapping.product_name,
       variant_id: mapping.variant_id,
@@ -718,8 +484,9 @@ export function saveKeywordMapping(
     // Check if mapping for this product_keyword + size_keyword already exists
     const existingIndex = current.findIndex(
       (m) =>
-        m.product_keyword.toLowerCase() === mapping.product_keyword.toLowerCase() &&
-        m.size_keyword.toLowerCase() === mapping.size_keyword.toLowerCase(),
+        (m.product_keyword || "").toLowerCase() ===
+          (mapping.product_keyword || "").toLowerCase().trim() &&
+        (m.size_keyword || "").toLowerCase() === (mapping.size_keyword || "").toLowerCase().trim(),
     );
 
     updatedMapping = {
@@ -727,8 +494,8 @@ export function saveKeywordMapping(
         existingIndex >= 0
           ? current[existingIndex]!.id
           : `map-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      product_keyword: mapping.product_keyword.trim(),
-      size_keyword: mapping.size_keyword.trim(),
+      product_keyword: (mapping.product_keyword || "").trim(),
+      size_keyword: (mapping.size_keyword || "").trim(),
       product_id: mapping.product_id,
       product_name: mapping.product_name,
       variant_id: mapping.variant_id,

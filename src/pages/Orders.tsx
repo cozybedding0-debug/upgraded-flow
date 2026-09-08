@@ -1,13 +1,14 @@
-import { useState, useEffect, useMemo, FormEvent } from "react";
-import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { useState, useEffect, useMemo, useCallback, FormEvent } from "react";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
-import { getProducts } from "@/lib/productsStore";
 import {
   readLocalOrders,
   saveLocalOrders,
   deleteLocalOrders,
+  mergeOrders,
   deductLocalStock,
 } from "@/lib/ordersStore";
+import { getProducts } from "@/lib/productsStore";
 import {
   formatCurrency,
   formatDate,
@@ -129,105 +130,52 @@ export default function Orders() {
     item?: DailyOrder;
   } | null>(null);
 
-  useEffect(() => {
-    void fetchPageData();
-  }, [profile?.id]);
-
-  async function fetchPageData() {
-    if (!profile?.id) {
-      setProducts(getProducts());
-      setOrders(readLocalOrders());
-      setDbCategories([
-        { name: "Mattress Topper" },
-        { name: "Duvet Cover" },
-        { name: "Fitted Sheet" },
-        { name: "Flat Sheet" },
-        { name: "Duvet" },
-        { name: "Pillow" },
-        { name: "Pillowcase" },
-        { name: "Mattress Protector" },
-      ]);
-      setLoading(false);
-      return;
-    }
-
+  const fetchPageData = useCallback(async () => {
     setLoading(true);
-    if (!isSupabaseConfigured) {
+    try {
+      if (isSupabaseConfigured && profile?.id) {
+        const [productsRes, variantsRes, ordersRes, categoriesRes] = await Promise.all([
+          supabase.from("products").select("*").eq("user_id", profile.id).order("product_name"),
+          supabase.from("product_variants").select("*").eq("user_id", profile.id),
+          supabase
+            .from("orders")
+            .select("*")
+            .eq("user_id", profile.id)
+            .order("created_at", { ascending: false }),
+          supabase.from("categories").select("name").order("name"),
+        ]);
+
+        if (categoriesRes.data) setDbCategories(categoriesRes.data);
+
+        const allVariants = variantsRes.data ?? [];
+        const mergedProducts = (productsRes.data ?? []).map((p) => ({
+          ...p,
+          variants: allVariants.filter((v) => v.product_id === p.id),
+        }));
+
+        const parsedProducts = mergedProducts
+          .map(normalizeProduct)
+          .filter((product): product is Product => product !== null);
+
+        const parsedOrders = (ordersRes.data as DailyOrder[]) || [];
+
+        setProducts(parsedProducts.length > 0 ? parsedProducts : getProducts());
+        setOrders(parsedOrders.length > 0 ? mergeOrders(parsedOrders) : readLocalOrders());
+        return;
+      }
       setProducts(getProducts());
       setOrders(readLocalOrders());
-      setDbCategories([
-        { name: "Mattress Topper" },
-        { name: "Duvet Cover" },
-        { name: "Fitted Sheet" },
-        { name: "Flat Sheet" },
-        { name: "Duvet" },
-        { name: "Pillow" },
-        { name: "Pillowcase" },
-        { name: "Mattress Protector" },
-      ]);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const [productsRes, variantsRes, ordersRes, categoriesRes] = await Promise.all([
-        supabase.from("products").select("*").eq("user_id", profile.id).order("product_name"),
-        supabase.from("product_variants").select("*").eq("user_id", profile.id),
-        supabase
-          .from("orders")
-          .select("*")
-          .eq("user_id", profile.id)
-          .order("created_at", { ascending: false }),
-        supabase.from("categories").select("name").order("name"),
-      ]);
-
-      if (productsRes.error) throw productsRes.error;
-      if (ordersRes.error) throw ordersRes.error;
-      if (categoriesRes.data && categoriesRes.data.length > 0) {
-        setDbCategories(categoriesRes.data);
-      } else {
-        setDbCategories([
-          { name: "Mattress Topper" },
-          { name: "Duvet Cover" },
-          { name: "Fitted Sheet" },
-          { name: "Flat Sheet" },
-          { name: "Duvet" },
-          { name: "Pillow" },
-          { name: "Pillowcase" },
-          { name: "Mattress Protector" },
-        ]);
-      }
-
-      const allVariants = variantsRes.data ?? [];
-      const mergedProducts = (productsRes.data ?? []).map((p) => ({
-        ...p,
-        variants: allVariants.filter((v) => v.product_id === p.id),
-      }));
-
-      const normalizedProds = mergedProducts
-        .map(normalizeProduct)
-        .filter((product): product is Product => product !== null);
-
-      setProducts(normalizedProds.length > 0 ? normalizedProds : getProducts());
-      const fetchedOrders = (ordersRes.data as DailyOrder[]) || [];
-      setOrders(fetchedOrders.length > 0 ? fetchedOrders : readLocalOrders());
     } catch {
       setProducts(getProducts());
       setOrders(readLocalOrders());
-      setDbCategories([
-        { name: "Mattress Topper" },
-        { name: "Duvet Cover" },
-        { name: "Fitted Sheet" },
-        { name: "Flat Sheet" },
-        { name: "Duvet" },
-        { name: "Pillow" },
-        { name: "Pillowcase" },
-        { name: "Mattress Protector" },
-      ]);
     } finally {
       setLoading(false);
     }
-  }
+  }, [profile?.id]);
+
+  useEffect(() => {
+    void fetchPageData();
+  }, [fetchPageData]);
 
   const uniqueCustomers = useMemo(() => {
     const custSet = new Set<string>();
@@ -440,16 +388,14 @@ export default function Orders() {
     }
 
     const userId = String(profile.id);
-    const orderDateStr = entryDate || new Date().toISOString().split("T")[0];
+    const orderDateStr = entryDate || (new Date().toISOString().split("T")[0] ?? "");
     const customerOrderId = String(Date.now());
     const savedName = finalCustomer;
 
-    const now = new Date().toISOString();
-    const localOrders: DailyOrder[] = validRows.map((r, idx) => ({
-      id: `order-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+    const insertData = validRows.map((r) => ({
       user_id: userId,
-      product_id: r.product_id ? String(r.product_id) : null,
-      variant_id: r.variant_id ? String(r.variant_id) : null,
+      product_id: String(r.product_id || ""),
+      variant_id: String(r.variant_id || ""),
       product_name: String(r.product_name || "Product"),
       category: String(r.category || "General"),
       size: String(r.size || ""),
@@ -461,103 +407,64 @@ export default function Orders() {
       channel: String(channel || "Direct"),
       notes: String(r.notes || ""),
       logged_by: userId,
-      created_at: now,
       customer_name: savedName,
       customer_order_id: customerOrderId,
       status: "Completed" as OrderStatus,
     }));
 
-    if (!isSupabaseConfigured) {
-      saveLocalOrders(localOrders);
-      deductLocalStock(localOrders);
-      setOrders(readLocalOrders());
-      setProducts(getProducts());
-      setSaveMsg({
-        type: "success",
-        text: `Order saved successfully! "${savedName}" — ${validRows.length} item(s).`,
-      });
-      setCustomerName("");
-      setIsAddingNewCust(false);
-      setNewCustName("");
-      setChannel("");
-      setRows([createEmptyRow()]);
-      setEntryDate(new Date().toISOString().split("T")[0] ?? "");
-      setSaving(false);
-      return;
-    }
+    const newOrderRows: DailyOrder[] = insertData.map((d, index) => ({
+      ...d,
+      id: `order-local-${Date.now()}-${index}`,
+      created_at: new Date().toISOString(),
+    }));
 
     try {
-      const insertData = localOrders.map((o) => ({
-        user_id: o.user_id,
-        product_id: o.product_id,
-        variant_id: o.variant_id,
-        product_name: o.product_name,
-        category: o.category,
-        size: o.size,
-        color: o.color,
-        unit_price: o.unit_price,
-        quantity: o.quantity,
-        total_price: o.total_price,
-        order_date: o.order_date,
-        channel: o.channel,
-        notes: o.notes,
-        logged_by: o.logged_by,
-        customer_name: o.customer_name,
-        customer_order_id: o.customer_order_id,
-        status: o.status,
-      }));
-
-      const { error } = await supabase.from("orders").insert(insertData).select("*");
-      if (error) throw error;
-
-      setSaveMsg({
-        type: "success",
-        text: `Order saved successfully! "${savedName}" — ${validRows.length} item(s).`,
-      });
-      setCustomerName("");
-      setIsAddingNewCust(false);
-      setNewCustName("");
-      setChannel("");
-      setRows([createEmptyRow()]);
-      setEntryDate(new Date().toISOString().split("T")[0] ?? "");
-      await fetchPageData();
-    } catch {
-      // Fallback to local storage if Supabase is offline
-      saveLocalOrders(localOrders);
-      deductLocalStock(localOrders);
-      setOrders(readLocalOrders());
-      setProducts(getProducts());
-      setSaveMsg({
-        type: "success",
-        text: `Order saved successfully! "${savedName}" — ${validRows.length} item(s).`,
-      });
-      setCustomerName("");
-      setIsAddingNewCust(false);
-      setNewCustName("");
-      setChannel("");
-      setRows([createEmptyRow()]);
-      setEntryDate(new Date().toISOString().split("T")[0] ?? "");
-    } finally {
-      setSaving(false);
+      if (isSupabaseConfigured && profile?.id) {
+        await supabase.from("orders").insert(insertData).select("*");
+      }
+    } catch (err) {
+      console.warn("Remote order save failed, persisting locally:", err);
     }
+
+    saveLocalOrders(newOrderRows);
+    deductLocalStock(
+      validRows.map((r) => ({
+        product_id: r.product_id,
+        variant_id: r.variant_id || null,
+        quantity: Number(r.quantity),
+      })),
+    );
+
+    setSaveMsg({
+      type: "success",
+      text: `Order saved successfully! "${savedName}" — ${validRows.length} item(s).`,
+    });
+    setCustomerName("");
+    setIsAddingNewCust(false);
+    setNewCustName("");
+    setChannel("");
+    setRows([createEmptyRow()]);
+    setEntryDate(new Date().toISOString().split("T")[0] ?? "");
+    await fetchPageData();
+    setSaving(false);
   }
 
   async function handleDeleteOrder() {
-    if (!deleteTarget || !profile?.id) return;
+    if (!deleteTarget) return;
     const ids = deleteTarget.item
       ? [deleteTarget.item.id]
       : deleteTarget.group.items.map((i) => i.id);
 
+    try {
+      if (isSupabaseConfigured && profile?.id) {
+        await supabase.from("orders").delete().eq("user_id", profile.id).in("id", ids);
+      }
+    } catch (err) {
+      console.warn("Remote delete failed, deleting locally:", err);
+    }
+
     deleteLocalOrders(ids);
     setOrders((prev) => prev.filter((o) => !ids.includes(o.id)));
-
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.from("orders").delete().eq("user_id", profile.id).in("id", ids);
-      } catch {
-        // Ignored, already deleted locally
-      }
-    }
     setDeleteTarget(null);
   }
 

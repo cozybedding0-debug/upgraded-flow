@@ -1,11 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
-import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
+import { readLocalOrders, mergeOrders } from "@/lib/ordersStore";
+import { getProducts } from "@/lib/productsStore";
 import { formatCurrency, formatDateShort, getDateRange, getPastDays } from "@/lib/utils";
 import { CATEGORIES } from "@/types";
 import type { DailyOrder, Product, DateRangePreset } from "@/types";
-import { getProducts } from "@/lib/productsStore";
-import { readLocalOrders } from "@/lib/ordersStore";
 import MetricCard from "@/components/MetricCard";
 import BarChart from "@/components/BarChart";
 import PieChart from "@/components/PieChart";
@@ -41,54 +41,52 @@ export default function Dashboard() {
   const [customEnd, setCustomEnd] = useState("");
   const [chartRange, setChartRange] = useState<7 | 30>(7);
 
-  useEffect(() => {
-    void fetchData();
-  }, [profile?.id]);
-
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     if (!profile?.id) {
-      setOrders([]);
-      setProducts([]);
+      setOrders(readLocalOrders());
+      setProducts(getProducts());
       setLoading(false);
       return;
     }
 
     setLoading(true);
-    if (!isSupabaseConfigured) {
-      setOrders(readLocalOrders());
-      setProducts(getProducts());
-      setLoading(false);
-      return;
-    }
-
     try {
-      const [{ data: orderData }, { data: productData }] = await Promise.all([
-        supabase
-          .from("orders")
-          .select("*")
-          .eq("user_id", profile.id)
-          .order("order_date", { ascending: false }),
-        supabase
-          .from("products")
-          .select("*, variants:product_variants(*)")
-          .eq("user_id", profile.id)
-          .order("product_name"),
-      ]);
-      const fetchedOrders = (orderData as DailyOrder[]) || [];
-      const fetchedProducts = ((productData ?? []) as unknown[])
-        .map(normalizeProduct)
-        .filter((product): product is Product => product !== null);
+      if (isSupabaseConfigured) {
+        const [{ data: orderData }, { data: productData }] = await Promise.all([
+          supabase
+            .from("orders")
+            .select("*")
+            .eq("user_id", profile.id)
+            .order("order_date", { ascending: false }),
+          supabase
+            .from("products")
+            .select("*, variants:product_variants(*)")
+            .eq("user_id", profile.id)
+            .order("product_name"),
+        ]);
+        const remoteOrders = (orderData as DailyOrder[]) || [];
+        const remoteProducts = ((productData ?? []) as unknown[])
+          .map(normalizeProduct)
+          .filter((product): product is Product => product !== null);
 
-      setOrders(fetchedOrders.length > 0 ? fetchedOrders : readLocalOrders());
-      setProducts(fetchedProducts.length > 0 ? fetchedProducts : getProducts());
+        setOrders(remoteOrders.length > 0 ? mergeOrders(remoteOrders) : readLocalOrders());
+        setProducts(remoteProducts.length > 0 ? remoteProducts : getProducts());
+      } else {
+        setOrders(readLocalOrders());
+        setProducts(getProducts());
+      }
     } catch {
-      // Backend unreachable (demo mode) — render local data instead of empty
+      // Backend unreachable (demo mode) — render local data
       setOrders(readLocalOrders());
       setProducts(getProducts());
     } finally {
       setLoading(false);
     }
-  }
+  }, [profile?.id]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const dateRange = useMemo(() => {
     if (rangePreset === "custom") {

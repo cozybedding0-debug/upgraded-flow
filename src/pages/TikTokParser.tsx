@@ -18,17 +18,17 @@ import {
   getPickingBatches,
   savePickingBatch,
   getSupabaseSqlSchema,
-  getReviewDashboardData,
-  saveReviewDashboardData,
 } from "@/lib/tiktokMappingStore";
 import {
   extractTextFromPdf,
   parsePickingListText,
-  parsePickingListAndAggregate,
+  testStrictFieldParsing,
   SAMPLE_TIKTOK_PICKING_LIST_TEXT,
+  SAMPLE_COMBINED_LABEL_AND_PACKING_SLIP_TEXT,
+  type FilteredPagesResult,
+  type PageClassification,
 } from "@/lib/pdfPickingParser";
-import ReviewDashboard from "@/components/tiktok/ReviewDashboard";
-import KeywordSettingsTab from "@/components/tiktok/KeywordSettingsTab";
+import ProductGroupedTable from "@/components/ProductGroupedTable";
 import type {
   Product,
   ProductKeywordRule,
@@ -38,7 +38,8 @@ import type {
   PickingListBatch,
   DailyOrder,
   OrderStatus,
-  ReviewDashboardData,
+  ProductGroupSummary,
+  AggregatedPickingItem,
 } from "@/types";
 import {
   Upload,
@@ -64,18 +65,14 @@ import {
   Sliders,
   History,
   Info,
+  Filter,
 } from "lucide-react";
 
-type ActiveTab = "review" | "upload" | "settings" | "history";
+type ActiveTab = "upload" | "settings" | "history";
 
 export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrders?: () => void }) {
   const { profile } = useAuth();
-  const [reviewData, setReviewData] = useState<ReviewDashboardData | null>(() =>
-    getReviewDashboardData(),
-  );
-  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
-    getReviewDashboardData() ? "review" : "upload",
-  );
+  const [activeTab, setActiveTab] = useState<ActiveTab>("upload");
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
 
@@ -83,6 +80,11 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [draftItems, setDraftItems] = useState<DraftPickingItem[]>([]);
+  const [productGroups, setProductGroups] = useState<ProductGroupSummary[]>([]);
+  const [selectedSizeIds, setSelectedSizeIds] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<"grouped" | "raw">("grouped");
+  const [pageFilterInfo, setPageFilterInfo] = useState<FilteredPagesResult | null>(null);
+  const [showPageBreakdown, setShowPageBreakdown] = useState<boolean>(false);
   const [batchName, setBatchName] = useState<string>("TikTok-Picking-List.pdf");
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
   const [searchFilter, setSearchFilter] = useState("");
@@ -94,6 +96,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Manual Raw Text / Paste drawer
   const [showPasteModal, setShowPasteModal] = useState(false);
@@ -114,6 +117,13 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
   const [isNewMapping, setIsNewMapping] = useState(false);
 
   // Live Test Sandbox in Settings
+  const [testMode, setTestMode] = useState<"fields" | "line">("fields");
+  const [testTitle, setTestTitle] = useState(
+    "Luxury 10cm Extra Thick Mattress Topper Single Double King Super King",
+  );
+  const [testVariation, setTestVariation] = useState("4ft Small Double / White");
+  const [testSku, setTestSku] = useState("TOP-SMD-WHT");
+  const [testQty, setTestQty] = useState(2);
   const [testInput, setTestInput] = useState(
     "Luxury Hotel Quality 10cm Extra Thick Mattress Topper - 4ft Small Double (120x190cm) Qty: 2",
   );
@@ -166,14 +176,30 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     setBatchName(file.name);
 
     try {
-      const text = await extractTextFromPdf(file);
+      const extractionResult = await extractTextFromPdf(file);
+      const text = extractionResult.text;
       if (!text || text.trim().length === 0) {
         throw new Error(
           "Could not extract text from the PDF. The file may be scanned or password protected.",
         );
       }
+
+      // Record page classification / filtering results
+      if (extractionResult.pageClassifications && extractionResult.pageClassifications.length > 0) {
+        setPageFilterInfo({
+          isCombinedDocument: extractionResult.isCombinedDocument,
+          totalPages: extractionResult.totalPages,
+          processedPages: extractionResult.processedPageNumbers,
+          filteredPages: extractionResult.filteredPageNumbers,
+          pageClassifications: extractionResult.pageClassifications,
+          filteredText: extractionResult.text,
+        });
+      } else {
+        setPageFilterInfo(null);
+      }
+
       const currentProducts = products.length > 0 ? products : getProducts();
-      const parseResult = parsePickingListAndAggregate(text, currentProducts, file.name);
+      const parseResult = parsePickingListText(text, currentProducts);
 
       if (parseResult.items.length === 0) {
         throw new Error(
@@ -182,17 +208,12 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
       }
 
       setDraftItems(parseResult.items);
-      const newRev: ReviewDashboardData = {
-        filename: file.name,
-        uploaded_at: new Date().toISOString(),
-        categories: parseResult.aggregatedCards,
-        total_units: parseResult.totalUnits,
-        total_lines: parseResult.totalLines,
-        raw_items_count: parseResult.items.length,
-      };
-      setReviewData(newRev);
-      saveReviewDashboardData(newRev);
-      setActiveTab("review");
+      setSelectedItemIds(new Set(parseResult.items.map((i) => i.id)));
+      setProductGroups(parseResult.productGroups);
+      setSelectedSizeIds(
+        new Set(parseResult.productGroups.flatMap((g) => g.sizes.map((s) => s.id))),
+      );
+      setActiveTab("upload");
     } catch (err: unknown) {
       console.error("PDF Parsing Error:", err);
       setExtractError(err instanceof Error ? err.message : "Failed to parse PDF file.");
@@ -205,26 +226,32 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
   const handleLoadSample = () => {
     setExtractError(null);
     setSubmitSuccess(null);
-    const sampleName = "TikTok-Sample-PickingList-Evri48.pdf";
-    setBatchName(sampleName);
+    setBatchName("TikTok-Sample-PickingList-Evri48.pdf");
     const currentProducts = products.length > 0 ? products : getProducts();
-    const parseResult = parsePickingListAndAggregate(
-      SAMPLE_TIKTOK_PICKING_LIST_TEXT,
+    const parseResult = parsePickingListText(SAMPLE_TIKTOK_PICKING_LIST_TEXT, currentProducts);
+    setDraftItems(parseResult.items);
+    setSelectedItemIds(new Set(parseResult.items.map((i) => i.id)));
+    setProductGroups(parseResult.productGroups);
+    setSelectedSizeIds(new Set(parseResult.productGroups.flatMap((g) => g.sizes.map((s) => s.id))));
+    setPageFilterInfo(parseResult.pageFilterResult || null);
+  };
+
+  // Quick load sample combined PDF (Shipping Labels + Packing Slips) to demonstrate smart page filtering
+  const handleLoadCombinedSample = () => {
+    setExtractError(null);
+    setSubmitSuccess(null);
+    setBatchName("TikTok-Combined-Labels-And-PackingSlips.pdf");
+    const currentProducts = products.length > 0 ? products : getProducts();
+    const parseResult = parsePickingListText(
+      SAMPLE_COMBINED_LABEL_AND_PACKING_SLIP_TEXT,
       currentProducts,
-      sampleName,
     );
     setDraftItems(parseResult.items);
-    const newRev: ReviewDashboardData = {
-      filename: sampleName,
-      uploaded_at: new Date().toISOString(),
-      categories: parseResult.aggregatedCards,
-      total_units: parseResult.totalUnits,
-      total_lines: parseResult.totalLines,
-      raw_items_count: parseResult.items.length,
-    };
-    setReviewData(newRev);
-    saveReviewDashboardData(newRev);
-    setActiveTab("review");
+    setSelectedItemIds(new Set(parseResult.items.map((i) => i.id)));
+    setProductGroups(parseResult.productGroups);
+    setSelectedSizeIds(new Set(parseResult.productGroups.flatMap((g) => g.sizes.map((s) => s.id))));
+    setPageFilterInfo(parseResult.pageFilterResult || null);
+    setShowPageBreakdown(true);
   };
 
   // Handle manual text paste
@@ -232,24 +259,15 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     if (!pastedText.trim()) return;
     setExtractError(null);
     setSubmitSuccess(null);
-    const pastedName = "TikTok-Pasted-List.txt";
-    setBatchName(pastedName);
+    setBatchName("TikTok-Pasted-List.txt");
     const currentProducts = products.length > 0 ? products : getProducts();
-    const parseResult = parsePickingListAndAggregate(pastedText, currentProducts, pastedName);
+    const parseResult = parsePickingListText(pastedText, currentProducts);
     setDraftItems(parseResult.items);
-    const newRev: ReviewDashboardData = {
-      filename: pastedName,
-      uploaded_at: new Date().toISOString(),
-      categories: parseResult.aggregatedCards,
-      total_units: parseResult.totalUnits,
-      total_lines: parseResult.totalLines,
-      raw_items_count: parseResult.items.length,
-    };
-    setReviewData(newRev);
-    saveReviewDashboardData(newRev);
+    setSelectedItemIds(new Set(parseResult.items.map((i) => i.id)));
+    setProductGroups(parseResult.productGroups);
+    setSelectedSizeIds(new Set(parseResult.productGroups.flatMap((g) => g.sizes.map((s) => s.id))));
     setShowPasteModal(false);
     setPastedText("");
-    setActiveTab("review");
   };
 
   // Re-run parsing / matching on current draft items with latest keyword mappings
@@ -259,6 +277,9 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     const rawText = draftItems.map((i) => i.raw_title).join("\n");
     const parseResult = parsePickingListText(rawText, currentProducts);
     setDraftItems(parseResult.items);
+    setSelectedItemIds(new Set(parseResult.items.map((i) => i.id)));
+    setProductGroups(parseResult.productGroups);
+    setSelectedSizeIds(new Set(parseResult.productGroups.flatMap((g) => g.sizes.map((s) => s.id))));
   };
 
   // Quick map an item from dropdown in draft review table
@@ -337,15 +358,17 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
 
   // Clear all draft items with in-app confirmation
   const handleClearDraft = () => {
-    if (draftItems.length === 0) return;
+    if (draftItems.length === 0 && productGroups.length === 0) return;
     setConfirmState({
       open: true,
       title: "Clear Draft Items",
-      message: `Are you sure you want to discard all ${draftItems.length} parsed draft item(s)? Any unsaved modifications will be lost.`,
+      message: `Are you sure you want to discard all parsed draft items and categories? Any unsaved modifications will be lost.`,
       confirmLabel: "Clear All",
       onConfirm: () => {
         setDraftItems([]);
         setSelectedItemIds(new Set());
+        setProductGroups([]);
+        setSelectedSizeIds(new Set());
         if (fileInputRef.current) {
           fileInputRef.current.value = "";
         }
@@ -357,7 +380,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     });
   };
 
-  // Toggle item selection in draft table
+  // Toggle item selection in raw draft table
   const toggleSelectItem = (id: string) => {
     setSelectedItemIds((prev) => {
       const next = new Set(prev);
@@ -375,7 +398,224 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     }
   };
 
-  // Delete draft item
+  // Grouped Product handlers
+  const handleToggleSelectSize = (sizeId: string) => {
+    setSelectedSizeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sizeId)) next.delete(sizeId);
+      else next.add(sizeId);
+      return next;
+    });
+  };
+
+  const handleToggleSelectGroup = (groupId: string) => {
+    const group = productGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    const groupSizeIds = group.sizes.map((s) => s.id);
+    const allInGroupSelected =
+      groupSizeIds.length > 0 && groupSizeIds.every((id) => selectedSizeIds.has(id));
+
+    setSelectedSizeIds((prev) => {
+      const next = new Set(prev);
+      if (allInGroupSelected) {
+        groupSizeIds.forEach((id) => next.delete(id));
+      } else {
+        groupSizeIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllSizes = () => {
+    setSelectedSizeIds(new Set(productGroups.flatMap((g) => g.sizes.map((s) => s.id))));
+  };
+
+  const handleDeselectAllSizes = () => {
+    setSelectedSizeIds(new Set());
+  };
+
+  const handleUpdateSizeQty = (groupId: string, sizeId: string, newQty: number) => {
+    const q = Math.max(1, newQty);
+    setProductGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId) return g;
+        const updatedSizes = g.sizes.map((s) =>
+          s.id === sizeId ? { ...s, total_quantity: q } : s,
+        );
+        const totalQty = updatedSizes.reduce((sum, s) => sum + s.total_quantity, 0);
+        return { ...g, sizes: updatedSizes, total_quantity: totalQty };
+      }),
+    );
+  };
+
+  const handleUpdateSizeDetails = (
+    groupId: string,
+    sizeId: string,
+    newSize: string,
+    newQty: number,
+    productId?: string,
+    variantId?: string,
+  ) => {
+    const product = products.find((p) => p.id === productId);
+    const variant = product?.variants?.find((v) => v.id === variantId);
+
+    setProductGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId) return g;
+        const updatedSizes = g.sizes.map((s) => {
+          if (s.id !== sizeId) return s;
+          return {
+            ...s,
+            size: newSize,
+            canonical_size: newSize,
+            total_quantity: Math.max(1, newQty),
+            product_id: productId || s.product_id,
+            product_name: product?.product_name || s.product_name,
+            variant_id: variantId || s.variant_id,
+            variant_name: variant
+              ? `${variant.variation_value}${variant.color ? ` - ${variant.color}` : ""}`
+              : product
+                ? newSize
+                : s.variant_name,
+            status: (productId ? "matched" : s.status) as "matched" | "unmatched" | "manual",
+            unit_price: variant?.unit_price || product?.unit_price || s.unit_price,
+            sku: variant?.sku || product?.sku || s.sku,
+            available_stock:
+              variant?.stock_quantity ?? product?.stock_quantity ?? s.available_stock,
+            category: product?.category || s.category,
+          };
+        });
+        const totalQty = updatedSizes.reduce((sum, s) => sum + s.total_quantity, 0);
+        return {
+          ...g,
+          sizes: updatedSizes,
+          total_quantity: totalQty,
+          matched_count: updatedSizes.filter((s) => s.status === "matched").length,
+          unmatched_count: updatedSizes.filter((s) => s.status === "unmatched").length,
+        };
+      }),
+    );
+  };
+
+  const handleDeleteSize = (groupId: string, sizeId: string) => {
+    setProductGroups((prev) =>
+      prev
+        .map((g) => {
+          if (g.id !== groupId) return g;
+          const updatedSizes = g.sizes.filter((s) => s.id !== sizeId);
+          const totalQty = updatedSizes.reduce((sum, s) => sum + s.total_quantity, 0);
+          return {
+            ...g,
+            sizes: updatedSizes,
+            total_sizes: updatedSizes.length,
+            total_quantity: totalQty,
+            matched_count: updatedSizes.filter((s) => s.status === "matched").length,
+            unmatched_count: updatedSizes.filter((s) => s.status === "unmatched").length,
+          };
+        })
+        .filter((g) => g.sizes.length > 0),
+    );
+    setSelectedSizeIds((prev) => {
+      const next = new Set(prev);
+      next.delete(sizeId);
+      return next;
+    });
+  };
+
+  const handleAddSizeToGroup = (groupId: string, sizeName: string, quantity: number) => {
+    setProductGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId) return g;
+        const cleanSize = (sizeName || "").trim();
+        if (!cleanSize) return g;
+        const existing = g.sizes.find(
+          (s) => s.canonical_size.toLowerCase() === cleanSize.toLowerCase(),
+        );
+        if (existing) {
+          return {
+            ...g,
+            sizes: g.sizes.map((s) =>
+              s.id === existing.id ? { ...s, total_quantity: s.total_quantity + quantity } : s,
+            ),
+            total_quantity: g.total_quantity + quantity,
+          };
+        }
+
+        const newId = `agg-${groupId}-${cleanSize.replace(/[^a-z0-9]/gi, "-")}-${Date.now()}`;
+        const newSizeItem: AggregatedPickingItem = {
+          id: newId,
+          size: cleanSize,
+          canonical_size: cleanSize,
+          total_quantity: quantity,
+          raw_count: 1,
+          source_order_ids: [],
+          raw_titles: [`Manual ${g.group_name} ${cleanSize}`],
+          status: "unmatched",
+          category: g.category,
+          unit_price: 0,
+          selected: true,
+        };
+
+        setSelectedSizeIds((p) => new Set(p).add(newId));
+        const updatedSizes = [...g.sizes, newSizeItem];
+        return {
+          ...g,
+          sizes: updatedSizes,
+          total_sizes: updatedSizes.length,
+          total_quantity: g.total_quantity + quantity,
+          unmatched_count: g.unmatched_count + 1,
+        };
+      }),
+    );
+  };
+
+  const handleAddProductGroup = (categoryName: string) => {
+    const clean = (categoryName || "").trim();
+    if (!clean) return;
+    const newGroup: ProductGroupSummary = {
+      id: `group-${clean.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${Date.now()}`,
+      group_name: clean.toUpperCase(),
+      product_keyword: clean,
+      category: "Bedding",
+      total_quantity: 0,
+      total_sizes: 0,
+      matched_count: 0,
+      unmatched_count: 0,
+      sizes: [],
+    };
+    setProductGroups((prev) => [newGroup, ...prev]);
+  };
+
+  const handleSavePermanentRule = (
+    productKeyword: string,
+    sizeKeyword: string,
+    productId: string,
+    variantId?: string,
+  ) => {
+    const product = products.find((p) => p.id === productId);
+    const variant = product?.variants?.find((v) => v.id === variantId);
+
+    saveKeywordMapping({
+      product_keyword: productKeyword,
+      size_keyword: sizeKeyword,
+      product_id: productId,
+      product_name: product?.product_name || productKeyword,
+      variant_id: variantId,
+      variant_name: variant
+        ? `${variant.variation_value}${variant.color ? ` - ${variant.color}` : ""}`
+        : undefined,
+      sku: variant?.sku || product?.sku || "",
+      notes: `Mapped from Review Table: ${productKeyword} - ${sizeKeyword}`,
+    });
+
+    setMappings(getKeywordMappings());
+    setSuccessMsg(
+      `Saved permanent rule: "${productKeyword}" + "${sizeKeyword}" mapped to ${product?.product_name}!`,
+    );
+    setTimeout(() => setSuccessMsg(null), 4000);
+  };
+
+  // Delete raw draft item
   const handleDeleteDraftItem = (id: string) => {
     setDraftItems((prev) => prev.filter((i) => i.id !== id));
   };
@@ -397,7 +637,33 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
 
   // Bulk Approve & Submit Entries to Inventory
   const handleApproveAndSubmit = async () => {
-    const itemsToSubmit = draftItems.filter((i) => selectedItemIds.has(i.id));
+    const itemsToSubmit: DraftPickingItem[] =
+      viewMode === "grouped" && productGroups.length > 0
+        ? productGroups.flatMap((group) =>
+            group.sizes
+              .filter((size) => selectedSizeIds.has(size.id))
+              .map((size, idx) => ({
+                id: size.id,
+                order_id:
+                  size.source_order_ids[0] || `PKL-${Date.now().toString().slice(-6)}-${idx + 1}`,
+                raw_title: size.raw_titles[0] || `${group.group_name} (${size.canonical_size})`,
+                detected_product_name: group.product_keyword,
+                detected_size: size.canonical_size,
+                quantity: size.total_quantity,
+                unit_price: size.unit_price || 0,
+                sku: size.sku,
+                status: size.status,
+                product_id: size.product_id,
+                product_name: size.product_name || group.product_keyword,
+                variant_id: size.variant_id,
+                variant_name: size.variant_name || size.canonical_size,
+                available_stock: size.available_stock,
+                category: size.category || group.category || "Bedding",
+                selected: true,
+              })),
+          )
+        : draftItems.filter((i) => selectedItemIds.has(i.id));
+
     if (itemsToSubmit.length === 0) return;
 
     setIsSubmitting(true);
@@ -533,138 +799,6 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     }
   };
 
-  // Handle Commit & Deduct Stock directly from Review Dashboard (Feature 3 CTA)
-  const handleCommitReviewStock = async () => {
-    if (!reviewData || reviewData.categories.length === 0) return;
-    setIsSubmitting(true);
-    setExtractError(null);
-
-    const currentProducts = products.length > 0 ? products : getProducts();
-    const userId = profile?.id ? String(profile.id) : "user-local";
-    const now = new Date().toISOString();
-    const batchId = `pkl-rev-${Date.now()}`;
-
-    const newOrders: DailyOrder[] = [];
-    const deductionItems: {
-      product_id: string | null;
-      variant_id: string | null;
-      quantity: number;
-    }[] = [];
-
-    let orderCounter = 0;
-    for (const cat of reviewData.categories) {
-      for (const sizeRow of cat.sizes) {
-        orderCounter++;
-        // Find matching product in catalog
-        const matchedProd =
-          currentProducts.find((p) => {
-            const catMatch =
-              (p.category && p.category.toLowerCase().includes(cat.category_name.toLowerCase())) ||
-              p.product_name.toLowerCase().includes(cat.category_name.toLowerCase());
-            const sizeMatch =
-              (p.size && p.size.toLowerCase() === sizeRow.size.toLowerCase()) ||
-              p.product_name.toLowerCase().includes(sizeRow.size.toLowerCase());
-            return catMatch && sizeMatch;
-          }) ||
-          currentProducts.find(
-            (p) =>
-              p.product_name.toLowerCase().includes(cat.category_name.toLowerCase()) ||
-              (p.category && p.category.toLowerCase().includes(cat.category_name.toLowerCase())),
-          );
-
-        const orderItem: DailyOrder = {
-          id: `order-tiktok-rev-${Date.now()}-${orderCounter}`,
-          user_id: userId,
-          product_id: matchedProd?.id || null,
-          variant_id: null,
-          product_name: matchedProd?.product_name || `${cat.category_name} - ${sizeRow.size}`,
-          category: matchedProd?.category || cat.category_name,
-          size: sizeRow.size,
-          unit_price: matchedProd?.unit_price || 0,
-          quantity: sizeRow.quantity,
-          total_price: (matchedProd?.unit_price || 0) * sizeRow.quantity,
-          order_date: orderDate,
-          channel: channelName,
-          notes: `TikTok Picking Review [${reviewData.filename}]`,
-          logged_by: userId,
-          customer_name: "TikTok Shop Customer",
-          customer_order_id: `TTS-${Date.now().toString().slice(-6)}-${orderCounter}`,
-          status: "Completed" as OrderStatus,
-          created_at: now,
-        };
-        newOrders.push(orderItem);
-
-        if (matchedProd?.id) {
-          deductionItems.push({
-            product_id: matchedProd.id,
-            variant_id: null,
-            quantity: sizeRow.quantity,
-          });
-        }
-      }
-    }
-
-    try {
-      // 1. Deduct local stock immediately
-      deductLocalStock(deductionItems);
-      // 2. Save local orders
-      saveLocalOrders(newOrders);
-
-      // 3. Supabase sync if enabled
-      if (isSupabaseConfigured && profile?.id) {
-        const supabaseInsertData = newOrders.map((o) => ({
-          user_id: o.user_id,
-          product_id: o.product_id,
-          variant_id: o.variant_id,
-          product_name: o.product_name,
-          category: o.category,
-          size: o.size,
-          unit_price: o.unit_price,
-          quantity: o.quantity,
-          total_price: o.total_price,
-          order_date: o.order_date,
-          channel: o.channel,
-          notes: o.notes,
-          logged_by: o.logged_by,
-          customer_name: o.customer_name,
-          customer_order_id: o.customer_order_id,
-          status: o.status,
-        }));
-        void supabase.from("orders").insert(supabaseInsertData);
-      }
-
-      // 4. Record batch
-      const batchRecord: PickingListBatch = {
-        id: batchId,
-        filename: reviewData.filename,
-        uploaded_at: now,
-        total_items: newOrders.length,
-        matched_items: deductionItems.length,
-        unmatched_items: newOrders.length - deductionItems.length,
-        total_quantity: reviewData.total_units,
-        status: "submitted",
-        items: draftItems,
-      };
-      savePickingBatch(batchRecord);
-      setBatches(getPickingBatches());
-
-      // 5. Clear review data and refresh products
-      saveReviewDashboardData(null);
-      setReviewData(null);
-      setDraftItems([]);
-      await fetchProducts();
-      refreshAllData();
-      setSubmitSuccess(
-        `Successfully committed ${reviewData.total_units} units across ${reviewData.categories.length} categories! Inventory deducted and Daily Orders created.`,
-      );
-    } catch (err: unknown) {
-      console.error("Review stock commit error:", err);
-      setExtractError(err instanceof Error ? err.message : "Failed to commit stock.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   // Filtered draft items
   const filteredItems = useMemo(() => {
     return draftItems.filter((item) => {
@@ -703,11 +837,33 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
     return { total, matched, unmatched, totalUnits, selectedUnits };
   }, [draftItems, selectedItemIds]);
 
+  const totalGroupedUnits = useMemo(() => {
+    return productGroups.reduce(
+      (sum, g) =>
+        sum +
+        g.sizes
+          .filter((s) => selectedSizeIds.has(s.id))
+          .reduce((acc, s) => acc + s.total_quantity, 0),
+      0,
+    );
+  }, [productGroups, selectedSizeIds]);
+
+  const totalGroupedSizes = useMemo(() => {
+    return productGroups.reduce(
+      (sum, g) => sum + g.sizes.filter((s) => selectedSizeIds.has(s.id)).length,
+      0,
+    );
+  }, [productGroups, selectedSizeIds]);
+
   // Live test result in Settings Sandbox
   const testSandboxResult = useMemo(() => {
     if (!testInput.trim()) return null;
     return parsePickingListText(testInput, products);
   }, [testInput, products]);
+
+  const testFieldResult = useMemo(() => {
+    return testStrictFieldParsing(testTitle, testVariation, testSku, testQty, products);
+  }, [testTitle, testVariation, testSku, testQty, products]);
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
@@ -734,36 +890,17 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl overflow-x-auto">
+        <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
           <button
-            id="tab-btn-review"
-            onClick={() => setActiveTab("review")}
-            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
-              activeTab === "review"
-                ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-            }`}
-          >
-            <Layers size={15} />
-            Review Dashboard
-            {reviewData && reviewData.total_units > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold">
-                {reviewData.total_units} units
-              </span>
-            )}
-          </button>
-
-          <button
-            id="tab-btn-upload"
             onClick={() => setActiveTab("upload")}
-            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
               activeTab === "upload"
                 ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             }`}
           >
             <Upload size={15} />
-            Upload & Drafts
+            Upload & Review
             {draftItems.length > 0 && (
               <span className="w-5 h-5 rounded-full bg-brand-600 text-white text-[10px] flex items-center justify-center">
                 {draftItems.length}
@@ -772,22 +909,23 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
           </button>
 
           <button
-            id="tab-btn-settings"
             onClick={() => setActiveTab("settings")}
-            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
               activeTab === "settings"
                 ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             }`}
           >
             <Settings size={15} />
-            Keyword Settings & Rules
+            Keyword Rules & SKU Mapping
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300">
+              {productRules.length + sizeRules.length}
+            </span>
           </button>
 
           <button
-            id="tab-btn-history"
             onClick={() => setActiveTab("history")}
-            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shrink-0 ${
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
               activeTab === "history"
                 ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
@@ -830,6 +968,24 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
         </div>
       )}
 
+      {/* Alert banner for info / actions */}
+      {successMsg && (
+        <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 flex items-start justify-between gap-3 animate-in fade-in">
+          <div className="flex items-start gap-2.5">
+            <CheckCircle2 size={18} className="mt-0.5 text-blue-600 dark:text-blue-400 shrink-0" />
+            <div className="text-sm">
+              <p className="font-semibold">{successMsg}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSuccessMsg(null)}
+            className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Alert banner for errors */}
       {extractError && (
         <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-300 flex items-start gap-2.5">
@@ -839,23 +995,6 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
             <p className="text-xs mt-0.5 text-rose-700 dark:text-rose-400/90">{extractError}</p>
           </div>
         </div>
-      )}
-
-      {/* ================= TAB 0: DAILY REVIEW DASHBOARD (FEATURE 2 & 3) ================= */}
-      {activeTab === "review" && (
-        <ReviewDashboard
-          reviewData={reviewData}
-          onUpdateReviewData={(data) => {
-            setReviewData(data);
-            saveReviewDashboardData(data);
-          }}
-          onCommitStock={handleCommitReviewStock}
-          isCommitting={isSubmitting}
-          products={products}
-          onNavigateToUpload={() => setActiveTab("upload")}
-          onNavigateToOrders={onNavigateToOrders}
-          onLoadSampleData={handleLoadSample}
-        />
       )}
 
       {/* ================= TAB 1: UPLOAD & DRAFT REVIEW ================= */}
@@ -907,8 +1046,15 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                         : "Click to browse or drop TikTok Picking List PDF"}
                     </p>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Supports TikTok Shop Seller Center Picking Lists and Packing Slips (.pdf)
+                      Supports TikTok Shop Picking Lists, Packing Slips & Combined Documents (.pdf)
                     </p>
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/40 mt-1.5">
+                      <Filter size={12} className="text-blue-600 dark:text-blue-400" />
+                      <span>
+                        Smart Page Filter: Isolates Packing Slips via SKU, Item Quantity, Qty,
+                        Product Name
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -929,6 +1075,23 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                     Load Sample Picking List
                   </span>
                   <span className="text-[10px] text-slate-400">10 items</span>
+                </button>
+
+                <button
+                  onClick={handleLoadCombinedSample}
+                  disabled={isExtracting}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold rounded-xl border border-blue-200 dark:border-blue-800/80 bg-blue-50/50 dark:bg-blue-950/30 hover:bg-blue-100/60 dark:hover:bg-blue-900/40 text-blue-800 dark:text-blue-300 transition-colors shadow-xs group"
+                >
+                  <span className="flex items-center gap-2">
+                    <Filter
+                      size={15}
+                      className="text-blue-600 dark:text-blue-400 group-hover:scale-110 transition-transform"
+                    />
+                    Test Combined PDF (Labels + Slips)
+                  </span>
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-200/60 dark:bg-blue-800/60 text-blue-700 dark:text-blue-300">
+                    Filtered
+                  </span>
                 </button>
 
                 <button
@@ -956,54 +1119,297 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
             </div>
           </div>
 
-          {/* Metrics Summary Bar (Only when items exist) */}
-          {draftItems.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
-                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                  Extracted Items
-                </p>
-                <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                  {metrics.total}
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">from {batchName}</p>
+          {/* Combined Document Filter Notice */}
+          {pageFilterInfo && pageFilterInfo.filteredPages.length > 0 && (
+            <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 dark:from-blue-950/40 dark:via-indigo-950/30 dark:to-blue-950/40 border border-blue-200/80 dark:border-blue-800/60 rounded-2xl p-4 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-blue-500/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Filter size={18} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-blue-950 dark:text-blue-200">
+                        Combined PDF Filter Active
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">
+                        <CheckCircle2 size={12} /> {pageFilterInfo.processedPages.length} of{" "}
+                        {pageFilterInfo.totalPages} pages processed
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300">
+                        {pageFilterInfo.filteredPages.length} Shipping Labels filtered out
+                      </span>
+                    </div>
+                    <p className="text-xs text-blue-900/80 dark:text-blue-300/80 mt-1">
+                      Only pages containing Packing List data (keywords: <strong>SKU</strong>,{" "}
+                      <strong>Item Quantity</strong>, <strong>Qty</strong>,{" "}
+                      <strong>Product Name</strong>) were processed. Shipping label pages (Pages{" "}
+                      {pageFilterInfo.filteredPages.join(", ")}) were automatically excluded.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowPageBreakdown(!showPageBreakdown)}
+                  className="self-start sm:self-center flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-slate-700 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-700/60 transition-colors shrink-0 shadow-xs"
+                >
+                  <Info size={13} />
+                  {showPageBreakdown ? "Hide Page Details" : "View Page Details"}
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform duration-200 ${showPageBreakdown ? "rotate-180" : ""}`}
+                  />
+                </button>
               </div>
 
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
-                  <CheckCircle2 size={14} /> Fully Matched
-                </p>
-                <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  {metrics.matched}
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Ready for deduction</p>
+              {/* Expandable Page Breakdown Grid */}
+              {showPageBreakdown && (
+                <div className="mt-3.5 pt-3 border-t border-blue-200/70 dark:border-blue-800/50">
+                  <p className="text-[11px] font-bold text-blue-900 dark:text-blue-300 uppercase tracking-wider mb-2.5">
+                    Page-by-Page Detection Analysis:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                    {pageFilterInfo.pageClassifications.map((p) => (
+                      <div
+                        key={p.pageNumber}
+                        className={`p-3 rounded-xl border text-xs transition-all ${
+                          p.isPackingSlip
+                            ? "bg-white dark:bg-slate-900 border-emerald-300 dark:border-emerald-800/70 text-slate-800 dark:text-slate-200 shadow-xs"
+                            : "bg-slate-100/70 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-500 dark:text-slate-400"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1.5">
+                          <span className="font-bold text-xs">Page {p.pageNumber}</span>
+                          {p.isPackingSlip ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50">
+                              Packing Slip (Processed)
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                              Shipping Label (Filtered)
+                            </span>
+                          )}
+                        </div>
+                        <div className="space-y-1.5 mt-2">
+                          <div>
+                            <span className="text-[10px] font-semibold text-slate-400 block mb-0.5">
+                              Detected Signals:
+                            </span>
+                            {p.matchedKeywords.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {p.matchedKeywords.map((kw, i) => (
+                                  <span
+                                    key={i}
+                                    className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-blue-50 dark:bg-blue-950/70 text-blue-600 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/50"
+                                  >
+                                    {kw}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-[10px] italic text-slate-400">
+                                Carrier / Address only
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 line-clamp-2 italic bg-slate-50 dark:bg-slate-800/60 p-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
+                            "{p.snippet}"
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Active Picking List Control & View Mode Switcher */}
+          {(draftItems.length > 0 || productGroups.length > 0) && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 pl-1">
+                  View Mode:
+                </span>
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("grouped")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      viewMode === "grouped"
+                        ? "bg-white dark:bg-slate-700 text-brand-600 dark:text-brand-300 shadow-xs"
+                        : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                    }`}
+                  >
+                    <Layers size={14} /> Grouped by Category ({productGroups.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("raw")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      viewMode === "raw"
+                        ? "bg-white dark:bg-slate-700 text-brand-600 dark:text-brand-300 shadow-xs"
+                        : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                    }`}
+                  >
+                    <FileText size={14} /> Raw Parsed Lines ({draftItems.length})
+                  </button>
+                </div>
               </div>
 
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
-                <p className="text-xs text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1.5">
-                  <AlertCircle size={14} /> Unmatched
-                </p>
-                <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
-                  {metrics.unmatched}
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Needs manual link</p>
-              </div>
-
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
-                <p className="text-xs text-brand-600 dark:text-brand-400 font-medium flex items-center gap-1.5">
-                  <ShoppingBag size={14} /> Total Units
-                </p>
-                <p className="text-2xl font-bold text-brand-600 dark:text-brand-400 mt-1">
-                  {metrics.selectedUnits}{" "}
-                  <span className="text-xs font-normal text-slate-400">/ {metrics.totalUnits}</span>
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Selected to deduct</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleReapplyRules}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
+                  title="Re-run product & size keywords on all extracted items"
+                >
+                  <RefreshCw size={13} /> Refresh Rules
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearDraft}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-all"
+                >
+                  <Trash2 size={13} /> Clear Draft
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowApproveModal(true)}
+                  disabled={
+                    viewMode === "grouped" ? selectedSizeIds.size === 0 : selectedItemIds.size === 0
+                  }
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs disabled:opacity-50 transition-all"
+                >
+                  <Check size={14} /> Commit to Inventory (
+                  {viewMode === "grouped" ? totalGroupedUnits : metrics.selectedUnits} units)
+                </button>
               </div>
             </div>
           )}
 
-          {/* Draft Review & Verification Table */}
-          {draftItems.length > 0 && (
+          {/* Metrics Summary Bar */}
+          {(draftItems.length > 0 || productGroups.length > 0) && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {viewMode === "grouped" ? (
+                <>
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                      Product Groups
+                    </p>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
+                      {productGroups.length}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Isolated product categories</p>
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-blue-600 dark:text-blue-400 font-medium flex items-center gap-1.5">
+                      <Layers size={14} /> Distinct Sizes
+                    </p>
+                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1">
+                      {productGroups.reduce((sum, g) => sum + g.sizes.length, 0)}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Strictly 1 row per size</p>
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+                      <CheckCircle2 size={14} /> Linked to SKU
+                    </p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                      {productGroups.reduce((sum, g) => sum + g.matched_count, 0)}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Ready for stock deduction</p>
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-brand-600 dark:text-brand-400 font-medium flex items-center gap-1.5">
+                      <ShoppingBag size={14} /> Total Units
+                    </p>
+                    <p className="text-2xl font-bold text-brand-600 dark:text-brand-400 mt-1">
+                      {totalGroupedUnits}{" "}
+                      <span className="text-xs font-normal text-slate-400">
+                        / {productGroups.reduce((sum, g) => sum + g.total_quantity, 0)}
+                      </span>
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">SUM across sizes</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                      Extracted Items
+                    </p>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
+                      {metrics.total}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">from {batchName}</p>
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+                      <CheckCircle2 size={14} /> Fully Matched
+                    </p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                      {metrics.matched}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Ready for deduction</p>
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1.5">
+                      <AlertCircle size={14} /> Unmatched
+                    </p>
+                    <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
+                      {metrics.unmatched}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Needs manual link</p>
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+                    <p className="text-xs text-brand-600 dark:text-brand-400 font-medium flex items-center gap-1.5">
+                      <ShoppingBag size={14} /> Total Units
+                    </p>
+                    <p className="text-2xl font-bold text-brand-600 dark:text-brand-400 mt-1">
+                      {metrics.selectedUnits}{" "}
+                      <span className="text-xs font-normal text-slate-400">
+                        / {metrics.totalUnits}
+                      </span>
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Selected to deduct</p>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Grouped Mode View */}
+          {viewMode === "grouped" && productGroups.length > 0 && (
+            <ProductGroupedTable
+              groups={productGroups}
+              products={products}
+              selectedSizeIds={selectedSizeIds}
+              onToggleSelectSize={handleToggleSelectSize}
+              onToggleSelectGroup={handleToggleSelectGroup}
+              onSelectAll={handleSelectAllSizes}
+              onDeselectAll={handleDeselectAllSizes}
+              onUpdateSizeQty={handleUpdateSizeQty}
+              onUpdateSizeDetails={handleUpdateSizeDetails}
+              onDeleteSize={handleDeleteSize}
+              onAddSize={handleAddSizeToGroup}
+              onAddProductGroup={handleAddProductGroup}
+              onSavePermanentRule={handleSavePermanentRule}
+              onCommitToInventory={() => setShowApproveModal(true)}
+              totalSelectedUnits={totalGroupedUnits}
+              totalSelectedSizes={totalGroupedSizes}
+            />
+          )}
+
+          {/* Raw Draft Review & Verification Table */}
+          {viewMode === "raw" && draftItems.length > 0 && (
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
               {/* Table Toolbar */}
               <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-800/30">
@@ -1304,13 +1710,33 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                             )}
                           </td>
 
-                          {/* Raw Title for Reference */}
+                          {/* Segregated Raw Fields for Reference */}
                           <td className="p-3 max-w-xs">
-                            <div
-                              className="text-[11px] text-slate-600 dark:text-slate-400 line-clamp-2"
-                              title={item.raw_title}
-                            >
-                              {item.raw_title}
+                            <div className="space-y-1">
+                              <div>
+                                <span className="inline-block text-[9px] uppercase tracking-wider font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 px-1 py-0.2 rounded border border-indigo-200/50 dark:border-indigo-800/50">
+                                  Title Scope
+                                </span>
+                                <div
+                                  className="text-[11px] text-slate-700 dark:text-slate-300 font-medium line-clamp-1 mt-0.5"
+                                  title={item.raw_title_clean || item.raw_title}
+                                >
+                                  {item.raw_title_clean || item.raw_title}
+                                </div>
+                              </div>
+                              {(item.raw_variation || item.sku) && (
+                                <div className="pt-1 border-t border-slate-100 dark:border-slate-800">
+                                  <span className="inline-block text-[9px] uppercase tracking-wider font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 px-1 py-0.2 rounded border border-amber-200/50 dark:border-amber-800/50">
+                                    Variation / SKU Scope
+                                  </span>
+                                  <div
+                                    className="text-[11px] text-slate-500 dark:text-slate-400 font-mono line-clamp-1 mt-0.5"
+                                    title={item.raw_variation || item.sku}
+                                  >
+                                    {item.raw_variation || `SKU: ${item.sku}`}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </td>
 
@@ -1355,7 +1781,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
           )}
 
           {/* Empty state when no draft items */}
-          {draftItems.length === 0 && !isExtracting && (
+          {draftItems.length === 0 && productGroups.length === 0 && !isExtracting && (
             <div className="border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center text-slate-400">
               <FileText size={36} className="mx-auto mb-3 opacity-30 text-slate-400" />
               <p className="font-semibold text-slate-700 dark:text-slate-300">
@@ -1372,10 +1798,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
 
       {/* ================= TAB 2: KEYWORD RULES & SKU MAPPING ================= */}
       {activeTab === "settings" && (
-        <div className="space-y-8">
-          {/* Dynamic Keyword & Size Configuration (Features 1A, 1B, 1C) */}
-          <KeywordSettingsTab />
-
+        <div className="space-y-6">
           {/* Information Callout */}
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-3">
             <Info size={16} className="mt-0.5 text-brand-600 shrink-0" />
@@ -1480,6 +1903,14 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                         ))}
                       </div>
                     )}
+                    {rule.regex_pattern && (
+                      <div
+                        className="mt-2 text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-mono truncate border border-indigo-200/50 dark:border-indigo-800/50"
+                        title={`Regex (Title Scope): ${rule.regex_pattern}`}
+                      >
+                        Regex: {rule.regex_pattern}
+                      </div>
+                    )}
                   </div>
                   {rule.notes && (
                     <p className="text-[10px] text-slate-400 mt-2 italic truncate">{rule.notes}</p>
@@ -1573,6 +2004,29 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                             {syn}
                           </span>
                         ))}
+                      </div>
+                    )}
+                    {rule.sku_patterns && rule.sku_patterns.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1 mt-2">
+                        <span className="text-[9px] uppercase font-bold text-amber-700 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-900/40 px-1 py-0.2 rounded">
+                          SKU:
+                        </span>
+                        {rule.sku_patterns.map((skuPat, pIdx) => (
+                          <span
+                            key={pIdx}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40 font-mono"
+                          >
+                            {skuPat}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {rule.regex_pattern && (
+                      <div
+                        className="mt-1.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-mono truncate border border-emerald-200/50 dark:border-emerald-800/50"
+                        title={`Regex (Variation/SKU Scope): ${rule.regex_pattern}`}
+                      >
+                        Regex: {rule.regex_pattern}
                       </div>
                     )}
                   </div>
@@ -1709,66 +2163,237 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
 
           {/* Section 4: Interactive Live Test Sandbox */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
-            <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-              <Sparkles size={16} className="text-amber-500" />
-              4. Interactive Parsing Sandbox (Test Titles in Real-Time)
-            </h3>
-            <p className="text-xs text-slate-400">
-              Type or paste any TikTok product title below to test keyword detection and inventory
-              linking immediately.
-            </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                  <Sparkles size={16} className="text-amber-500" />
+                  4. Interactive Parsing Sandbox & Field Boundary Inspector
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Verify strict field segregation: Product Category extracted from Title, Size
+                  extracted from Variation/SKU, and Quantity from Qty.
+                </p>
+              </div>
 
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={testInput}
-                onChange={(e) => setTestInput(e.target.value)}
-                placeholder="e.g. Luxury 10cm Extra Thick Bed Mattress Topper 4ft Small Double (Qty: 2)"
-                className="flex-1 px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-brand-500"
-              />
+              {/* Mode Toggle */}
+              <div className="flex items-center gap-1 p-0.5 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-semibold self-start">
+                <button
+                  type="button"
+                  onClick={() => setTestMode("fields")}
+                  className={`px-3 py-1 rounded-md transition-all ${
+                    testMode === "fields"
+                      ? "bg-white dark:bg-slate-700 text-brand-600 dark:text-brand-400 shadow-xs"
+                      : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  Strict Columns Test
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTestMode("line")}
+                  className={`px-3 py-1 rounded-md transition-all ${
+                    testMode === "line"
+                      ? "bg-white dark:bg-slate-700 text-brand-600 dark:text-brand-400 shadow-xs"
+                      : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  Raw Line Test
+                </button>
+              </div>
             </div>
 
-            {testSandboxResult && testSandboxResult.items.length > 0 && (
-              <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
-                <div>
-                  <span className="text-[10px] text-slate-400 block">Detected Product:</span>
-                  <span className="font-bold text-slate-900 dark:text-white">
-                    {testSandboxResult.items[0]?.detected_product_name}
-                  </span>
+            {testMode === "fields" ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 text-xs">
+                  {/* Title Column Input */}
+                  <div className="md:col-span-6 space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500" />
+                      Product Title Column (Category Scope Only)
+                    </label>
+                    <input
+                      type="text"
+                      value={testTitle}
+                      onChange={(e) => setTestTitle(e.target.value)}
+                      placeholder="e.g. Luxury 10cm Extra Thick Mattress Topper Single Double King Super King"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/30 dark:bg-indigo-950/20 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      SEO sizes in this title (e.g. Single, Double, King) are strictly ignored.
+                    </p>
+                  </div>
+
+                  {/* Variation Column Input */}
+                  <div className="md:col-span-3 space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-500" />
+                      Variation Column (Size Scope)
+                    </label>
+                    <input
+                      type="text"
+                      value={testVariation}
+                      onChange={(e) => setTestVariation(e.target.value)}
+                      placeholder="e.g. 4ft Small Double / White"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50/30 dark:bg-amber-950/20 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                    />
+                    <p className="text-[10px] text-slate-400">Primary source for target size.</p>
+                  </div>
+
+                  {/* Seller SKU Input */}
+                  <div className="md:col-span-2 space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      Seller SKU
+                    </label>
+                    <input
+                      type="text"
+                      value={testSku}
+                      onChange={(e) => setTestSku(e.target.value)}
+                      placeholder="e.g. TOP-SMD-WHT"
+                      className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/30 dark:bg-emerald-950/20 text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <p className="text-[10px] text-slate-400">SKU pattern fallback.</p>
+                  </div>
+
+                  {/* Quantity Input */}
+                  <div className="md:col-span-1 space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-brand-500" />
+                      Qty
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={testQty}
+                      onChange={(e) => setTestQty(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-full px-2 py-2 text-xs font-bold text-center rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 block">Detected Size:</span>
-                  <span className="font-bold text-slate-900 dark:text-white">
-                    {testSandboxResult.items[0]?.detected_size}
-                  </span>
+
+                {/* Strict Test Result Card */}
+                {testFieldResult && (
+                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+                      {/* Detected Category from Title */}
+                      <div className="p-2.5 rounded-lg bg-indigo-50/70 dark:bg-indigo-900/30 border border-indigo-200/60 dark:border-indigo-800/40">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300 block">
+                          Category (From Title Only)
+                        </span>
+                        <span className="font-bold text-slate-900 dark:text-white text-sm">
+                          {testFieldResult.detected_product_name}
+                        </span>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          ✓ Size keywords in title were ignored
+                        </div>
+                      </div>
+
+                      {/* Detected Size from Variation / SKU */}
+                      <div className="p-2.5 rounded-lg bg-amber-50/70 dark:bg-amber-900/30 border border-amber-200/60 dark:border-amber-800/40">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300 block">
+                          Size (From Variation / SKU)
+                        </span>
+                        <span className="font-bold text-slate-900 dark:text-white text-sm">
+                          {testFieldResult.detected_size}
+                        </span>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          ✓ Extracted strictly from Variation / SKU
+                        </div>
+                      </div>
+
+                      {/* Quantity */}
+                      <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                          Quantity (Qty Column)
+                        </span>
+                        <span className="font-bold text-brand-600 dark:text-brand-400 text-sm">
+                          {testFieldResult.quantity} units
+                        </span>
+                      </div>
+
+                      {/* Matched Inventory Item */}
+                      <div className="p-2.5 rounded-lg bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                          Inventory Match
+                        </span>
+                        <span
+                          className={`font-semibold text-xs inline-flex items-center gap-1 mt-0.5 ${
+                            testFieldResult.product_id
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-amber-600 dark:text-amber-400"
+                          }`}
+                        >
+                          {testFieldResult.product_id ? (
+                            <>
+                              <Check size={13} /> {testFieldResult.product_name} (
+                              {testFieldResult.variant_name || "Standard"})
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle size={13} /> Unmatched (No mapping found)
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={testInput}
+                    onChange={(e) => setTestInput(e.target.value)}
+                    placeholder="e.g. Luxury 10cm Extra Thick Bed Mattress Topper 4ft Small Double (Qty: 2)"
+                    className="flex-1 px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-brand-500"
+                  />
                 </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 block">Quantity:</span>
-                  <span className="font-bold text-brand-600 dark:text-brand-400">
-                    {testSandboxResult.items[0]?.quantity}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 block">Inventory Match:</span>
-                  <span
-                    className={`font-semibold inline-flex items-center gap-1 ${
-                      testSandboxResult.items[0]?.product_id
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-amber-600 dark:text-amber-400"
-                    }`}
-                  >
-                    {testSandboxResult.items[0]?.product_id ? (
-                      <>
-                        <Check size={13} /> {testSandboxResult.items[0]?.product_name} (
-                        {testSandboxResult.items[0]?.variant_name || "Std"})
-                      </>
-                    ) : (
-                      <>
-                        <AlertCircle size={13} /> Unmatched
-                      </>
-                    )}
-                  </span>
-                </div>
+
+                {testSandboxResult && testSandboxResult.items.length > 0 && (
+                  <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block">Detected Product:</span>
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {testSandboxResult.items[0]?.detected_product_name}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-400 block">Detected Size:</span>
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {testSandboxResult.items[0]?.detected_size}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-400 block">Quantity:</span>
+                      <span className="font-bold text-brand-600 dark:text-brand-400">
+                        {testSandboxResult.items[0]?.quantity}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-400 block">Inventory Match:</span>
+                      <span
+                        className={`font-semibold inline-flex items-center gap-1 ${
+                          testSandboxResult.items[0]?.product_id
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-amber-600 dark:text-amber-400"
+                        }`}
+                      >
+                        {testSandboxResult.items[0]?.product_id ? (
+                          <>
+                            <Check size={13} /> {testSandboxResult.items[0]?.product_name} (
+                            {testSandboxResult.items[0]?.variant_name || "Std"})
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle size={13} /> Unmatched
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1898,15 +2523,17 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
             <div className="space-y-3 text-xs">
               <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700/60 space-y-2">
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Selected Items:</span>
+                  <span className="text-slate-500">
+                    {viewMode === "grouped" ? "Selected Sizes to Deduct:" : "Selected Items:"}
+                  </span>
                   <span className="font-bold text-slate-900 dark:text-white">
-                    {selectedItemIds.size}
+                    {viewMode === "grouped" ? selectedSizeIds.size : selectedItemIds.size}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Total Units to Deduct:</span>
                   <span className="font-bold text-brand-600 dark:text-brand-400">
-                    {metrics.selectedUnits} units
+                    {viewMode === "grouped" ? totalGroupedUnits : metrics.selectedUnits} units
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -1962,7 +2589,10 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
               <button
                 type="button"
                 onClick={handleApproveAndSubmit}
-                disabled={isSubmitting}
+                disabled={
+                  isSubmitting ||
+                  (viewMode === "grouped" ? selectedSizeIds.size === 0 : selectedItemIds.size === 0)
+                }
                 className="flex items-center gap-2 px-5 py-2 text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm disabled:opacity-50"
               >
                 {isSubmitting ? (
@@ -2036,7 +2666,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                 </label>
                 <input
                   type="text"
-                  value={editingPRule.keyword}
+                  value={editingPRule.keyword || ""}
                   onChange={(e) =>
                     setEditingPRule((prev) => (prev ? { ...prev, keyword: e.target.value } : null))
                   }
@@ -2051,7 +2681,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                 </label>
                 <input
                   type="text"
-                  value={editingPRule.aliases.join(", ")}
+                  value={editingPRule.aliases?.join(", ") || ""}
                   onChange={(e) =>
                     setEditingPRule((prev) =>
                       prev
@@ -2059,7 +2689,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                             ...prev,
                             aliases: e.target.value
                               .split(",")
-                              .map((s) => s.trim())
+                              .map((s) => (s || "").trim())
                               .filter(Boolean),
                           }
                         : null,
@@ -2068,6 +2698,26 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                   placeholder="e.g. Topper, Bed Topper, 10cm Topper"
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                 />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Custom Regex Pattern (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={editingPRule.regex_pattern || ""}
+                  onChange={(e) =>
+                    setEditingPRule((prev) =>
+                      prev ? { ...prev, regex_pattern: e.target.value } : null,
+                    )
+                  }
+                  placeholder="e.g. ^.*(?:Mattress\s*Topper|Bed\s*Topper).*$"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Scope: Evaluated strictly against the Product Title column.
+                </p>
               </div>
 
               <div>
@@ -2095,7 +2745,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
               </button>
               <button
                 onClick={() => {
-                  if (!editingPRule.keyword.trim()) return;
+                  if (!editingPRule?.keyword?.trim()) return;
                   saveProductKeywordRule(editingPRule);
                   setProductRules(getProductKeywordRules());
                   setEditingPRule(null);
@@ -2116,7 +2766,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
             <h3 className="font-bold text-base text-slate-900 dark:text-white">
               {isNewSRule
                 ? "Add Target Size Keyword Rule"
-                : `Edit "${editingSRule.canonical_size}"`}
+                : `Edit "${editingSRule.canonical_size || ""}"`}
             </h3>
 
             <div className="space-y-3 text-xs">
@@ -2126,7 +2776,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                 </label>
                 <input
                   type="text"
-                  value={editingSRule.canonical_size}
+                  value={editingSRule.canonical_size || ""}
                   onChange={(e) =>
                     setEditingSRule((prev) =>
                       prev ? { ...prev, canonical_size: e.target.value } : null,
@@ -2143,7 +2793,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                 </label>
                 <input
                   type="text"
-                  value={editingSRule.synonyms.join(", ")}
+                  value={editingSRule.synonyms?.join(", ") || ""}
                   onChange={(e) =>
                     setEditingSRule((prev) =>
                       prev
@@ -2151,7 +2801,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                             ...prev,
                             synonyms: e.target.value
                               .split(",")
-                              .map((s) => s.trim())
+                              .map((s) => (s || "").trim())
                               .filter(Boolean),
                           }
                         : null,
@@ -2160,6 +2810,58 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                   placeholder="e.g. 4ft, small double, 120x190, three quarter"
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                 />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Searched in Variation text (e.g. &quot;Color: White, Size: 4ft Small
+                  Double&quot;).
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Seller SKU Codes / Patterns (comma-separated, Optional)
+                </label>
+                <input
+                  type="text"
+                  value={editingSRule.sku_patterns?.join(", ") || ""}
+                  onChange={(e) =>
+                    setEditingSRule((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            sku_patterns: e.target.value
+                              .split(",")
+                              .map((s) => (s || "").trim())
+                              .filter(Boolean),
+                          }
+                        : null,
+                    )
+                  }
+                  placeholder="e.g. DBL, 4FT6, TOP-DBL"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Scope: Evaluated strictly against the Seller SKU column.
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Custom Regex Pattern (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={editingSRule.regex_pattern || ""}
+                  onChange={(e) =>
+                    setEditingSRule((prev) =>
+                      prev ? { ...prev, regex_pattern: e.target.value } : null,
+                    )
+                  }
+                  placeholder="e.g. \b(?:double|4ft6|135x190)\b"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Scope: Evaluated strictly against the Variation and Seller SKU columns.
+                </p>
               </div>
 
               <div>
@@ -2187,7 +2889,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
               </button>
               <button
                 onClick={() => {
-                  if (!editingSRule.canonical_size.trim()) return;
+                  if (!editingSRule?.canonical_size?.trim()) return;
                   saveSizeKeywordRule(editingSRule);
                   setSizeRules(getSizeKeywordRules());
                   setEditingSRule(null);
@@ -2217,7 +2919,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                   </label>
                   <input
                     type="text"
-                    value={editingMapping.product_keyword}
+                    value={editingMapping.product_keyword || ""}
                     onChange={(e) =>
                       setEditingMapping((prev) =>
                         prev ? { ...prev, product_keyword: e.target.value } : null,
@@ -2233,7 +2935,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                   </label>
                   <input
                     type="text"
-                    value={editingMapping.size_keyword}
+                    value={editingMapping.size_keyword || ""}
                     onChange={(e) =>
                       setEditingMapping((prev) =>
                         prev ? { ...prev, size_keyword: e.target.value } : null,
@@ -2250,7 +2952,7 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                   Select Target Inventory Product *
                 </label>
                 <select
-                  value={editingMapping.product_id}
+                  value={editingMapping.product_id || ""}
                   onChange={(e) => {
                     const prod = products.find((p) => p.id === e.target.value);
                     setEditingMapping((prev) =>
@@ -2356,9 +3058,9 @@ export default function TikTokParser({ onNavigateToOrders }: { onNavigateToOrder
                 type="button"
                 onClick={() => {
                   if (
-                    !editingMapping.product_keyword.trim() ||
-                    !editingMapping.size_keyword.trim() ||
-                    !editingMapping.product_id
+                    !editingMapping?.product_keyword?.trim() ||
+                    !editingMapping?.size_keyword?.trim() ||
+                    !editingMapping?.product_id
                   ) {
                     setMappingError(
                       "Please fill in the product keyword, size keyword, and select a target product.",
